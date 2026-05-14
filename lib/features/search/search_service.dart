@@ -1,24 +1,15 @@
 import '../../core/db/daos.dart';
+import '../../core/db/text_index.dart';
 
 class SearchService {
   final SearchDao _dao = SearchDao();
 
-  // 把用户输入转成 FTS5 安全查询
-  // - 避免特殊字符引发语法错误
-  // - 多关键词用 AND 连接
-  String _sanitize(String raw) {
-    final tokens = raw
-        .replaceAll(RegExp(r'["\(\)\*]'), ' ')
-        .split(RegExp(r'\s+'))
-        .where((t) => t.isNotEmpty)
-        .map((t) => '"$t"') // 用引号包住每个 token，避免 FTS5 把它当语法
-        .toList();
-    return tokens.join(' AND ');
-  }
-
+  // 把用户输入转成 FTS5 安全查询，再交给 DAO
+  // - bigram 化保证 ≥2 字关键词命中（trigram 至少 3 字）
+  // - rawQuery 也透传给 DAO，用于 Dart 侧 snippet 高亮
   Future<List<SearchHit>> search(String raw) async {
-    final query = _sanitize(raw);
-    if (query.isEmpty) return const [];
-    return _dao.search(query);
+    final ftsQuery = toBigramQuery(raw);
+    if (ftsQuery.isEmpty) return const [];
+    return _dao.search(ftsQuery: ftsQuery, rawQuery: raw);
   }
 }

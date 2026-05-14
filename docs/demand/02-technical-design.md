@@ -11,7 +11,7 @@
 | 语言 | **Dart 3.x** | Flutter 唯一官方语言，空安全成熟 |
 | 状态管理 | **Riverpod 2.x** | 社区主流、可测试、编译期安全、无需 BuildContext |
 | 本地存储 | **sqflite + sqflite_common_ffi** | 跨平台 SQLite，桌面端通过 ffi 支持 |
-| 全文索引 | **SQLite FTS5（trigram tokenizer）** | 内置无外部依赖，trigram 对中文检索效果好 |
+| 全文索引 | **SQLite FTS5（unicode61 + Dart 侧 bigram 化）** | 内置无外部依赖；自切 bigram 让 ≥2 字关键词可搜（trigram 至少 3 字）|
 | 编码检测 | **charset_converter + 自实现策略** | 支持 GBK/GB18030/UTF-8/UTF-16 |
 | 文件选择 | **file_picker** | 跨平台 + Android SAF 兼容 |
 | epub 解析 | **epubx + html + archive** | epubx 读 epub，html 抽纯文本，archive 处理"解压目录形式"的 epub |
@@ -130,9 +130,10 @@ CREATE TABLE chapters (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   book_id INTEGER NOT NULL,
   chapter_index INTEGER NOT NULL,  -- 章节序号（0-based）
-  title TEXT NOT NULL,             -- 章节标题
+  title TEXT NOT NULL,             -- 章节标题（原文，UI 展示用）
   start_char INTEGER NOT NULL,     -- 在原文中的起始字符位置
   end_char INTEGER NOT NULL,       -- 在原文中的结束字符位置
+  content TEXT NOT NULL,           -- 章节正文（搜索结果生成 snippet 用）
   FOREIGN KEY (book_id) REFERENCES books(id) ON DELETE CASCADE
 );
 CREATE INDEX idx_chapters_book ON chapters(book_id, chapter_index);
@@ -146,16 +147,14 @@ CREATE TABLE reading_progress (
   FOREIGN KEY (book_id) REFERENCES books(id) ON DELETE CASCADE
 );
 
--- 全文索引（FTS5，trigram 分词器）
+-- 全文索引（FTS5，unicode61 分词器；title/search 列存 Dart 侧 bigram 化的 token 序列）
 CREATE VIRTUAL TABLE chapters_fts USING fts5(
-  title,
-  content,
-  content='',                      -- 外部内容模式（不重复存储）
-  tokenize='trigram'
+  title,                            -- bigram 化后的章节标题（用于搜索）
+  search,                           -- bigram 化后的章节正文（用于搜索）
+  tokenize='unicode61'              -- 按空白切分；每个 bigram 在序列中作为一个完整 token
 );
-
--- 用 trigger 把 chapters_fts 与 chapters 关联
--- 但内容存储独立（chapters 表只存元数据，content 由 importer 写入 fts）
+-- 不用 contentless（content=''）：老版本 SQLite 的 contentless 表 DELETE 不支持
+-- 代价：FTS5 表内多存一份 bigram 序列（约原文 2x）
 
 -- 用户偏好设置（单行表）
 CREATE TABLE settings (
@@ -165,10 +164,11 @@ CREATE TABLE settings (
 ```
 
 **Schema 设计要点**：
-- 章节的 `content` 不存储在 `chapters` 表，只存到 FTS5 索引中（节省空间）
-- 阅读时按需从 txt 文件 + 章节起止位置读取（IO 不重）
-- FTS5 用 `trigram` 分词器（SQLite 3.34+ 内置），中文 3-gram 分词效果实测好于默认 unicode61
-- 删除书籍时通过 `ON DELETE CASCADE` 级联清理章节与进度，FTS5 需要手动清理
+- `chapters.content` 存章节原文，用于搜索结果生成 snippet（不依赖 FTS5 内部内容）
+- reader 仍走"沙盒文件 + 起止位置截取"的路径，与 `chapters.content` 互不依赖
+- FTS5 用 **unicode61 + Dart 侧 bigram 化**：原文 `"你好世界"` → 索引序列 `"你好 好世 世界"`，每个 bigram 作为一个 token；搜索 `"你好"` 命中第一个 token
+- 查询同样 bigram 化 + 紧邻短语：`"你好世"` → `("你好" + "好世")`，等价于原文连续出现 `"你好世"`
+- 删除书籍时通过 `ON DELETE CASCADE` 级联清理章节与进度，FTS5 需要手动按 rowid 清理
 
 ### 4.2 领域实体（Dart）
 
@@ -259,21 +259,29 @@ final _chapterPattern = RegExp(
 
 性能预算：单章节（1-3 万字）分页计算 ≤ 100 ms。
 
-### 5.4 全文搜索（features/search/search_service.dart）
+### 5.4 全文搜索（features/search/search_service.dart + core/db/text_index.dart）
 
+**索引侧（导入时）**：每章节正文经 `toBigramTokens()` 切成 `"你好 好世 世界"` 这种 bigram 序列，写入 `chapters_fts.search`。FTS5 的 unicode61 分词器按空格切，每个 bigram 作为一个完整 token 入倒排索引。
+
+**查询侧**：用户输入经 `toBigramQuery()` 处理：
+- `"你好"` → `'"你好"'`（单 token）
+- `"你好世"` → `'("你好" + "好世")'`（FTS5 phrase 紧邻短语，等价原文连续）
+- `"剑客 武功"` → `'"剑客" AND "武功"'`（多组之间 AND）
+
+**SQL**：
 ```sql
 SELECT
-  b.id, b.title, c.id, c.chapter_index, c.title,
-  snippet(chapters_fts, 1, '<mark>', '</mark>', '...', 32) AS preview
+  b.id, b.title, c.id, c.chapter_index, c.title, c.content
 FROM chapters_fts
 JOIN chapters c ON chapters_fts.rowid = c.id
 JOIN books b ON c.book_id = b.id
-WHERE chapters_fts MATCH ?
+WHERE chapters_fts MATCH ?    -- bigram 化后的 FTS5 表达式
 ORDER BY rank
 LIMIT 100;
 ```
 
-- 使用 FTS5 内置 `snippet()` 生成上下文摘要
+**Snippet**：FTS5 内部存的是 bigram 序列，自带 `snippet()` 出来的位置不映射回原文。改在 Dart 侧 `makeSnippet(content, rawQuery)` 从 `chapters.content` 找匹配位置 ±24 字符截取，加 `<mark>` 高亮。
+
 - 用 `rank` 排序（FTS5 BM25 默认）
 - 结果点击 → 路由到 `reader_page` 并定位到 `chapter_index + char_offset`
 
@@ -294,7 +302,7 @@ LIMIT 100;
 ### 6.1 Android
 - 最低 SDK 26，目标 SDK 跟随 Flutter stable 默认
 - Storage Access Framework：`file_picker` 默认走 SAF，无需额外申请存储权限
-- SQLite FTS5 trigram：Android 系统内置 SQLite 一般支持，但保险起见在 pubspec 用 `sqflite` 即可（带的是 SQLite 3.39+）
+- SQLite FTS5 unicode61：所有 SQLite 版本都内置（无需额外编译选项），Android 系统 SQLite 全覆盖
 
 ### 6.2 macOS
 - 沙盒：默认 enabled，需要在 `macos/Runner/*.entitlements` 中开启 `com.apple.security.files.user-selected.read-only` 才能选文件
@@ -326,7 +334,8 @@ LIMIT 100;
 | 风险 | 影响 | 应对 |
 |---|---|---|
 | Android 第一次构建踩 Gradle / NDK / JDK 版本 | 阻塞 | 文档化构建步骤；遇到时单独定位 |
-| FTS5 trigram 在某些平台 SQLite 版本未启用 | 搜索不可用 | 启动时探测，不可用则给出明确错误并切换到 LIKE 兜底 |
+| FTS5 索引体积约为原文 3-5x（chapters.content 1x + FTS5 内部 bigram 序列 2x + 倒排索引 ~2x）| 占用大 | MVP 接受；远期可改 contentless 模式（需保证最低 SQLite 3.43+）|
+| 1 字符的关键词搜不到（bigram 最低 2 字）| 短词搜索失效 | 文档明确"≥2 字符"；如需 1 字搜索，再加 LIKE 兜底分支 |
 | TextPainter 在不同平台字体度量微差 | 分页结果略不同 | 接受差异（同一设备稳定即可），不强求跨平台一致 |
 | 大文件（>10MB）UI 卡顿 | 体验下降 | MVP 不优化，文档明确范围；后续用 Isolate + 流式解析 |
 | GBK 文件少见的字符解码失败 | 个别小说乱码 | 使用 GB18030（GBK 超集）；仍失败时提示并允许跳过 |

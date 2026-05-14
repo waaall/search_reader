@@ -5,6 +5,7 @@ import '../../domain/chapter.dart';
 import '../../domain/reading_progress.dart';
 import '../parser/book_format.dart';
 import 'database.dart';
+import 'text_index.dart';
 
 // 数据访问层：每个表一个 DAO 类
 // 所有 DAO 共享同一个 Database 单例
@@ -88,6 +89,7 @@ class ChapterDao {
   Database get _db => AppDatabase.instance.db;
 
   // 批量写入章节 + FTS5 索引（同事务，失败回滚）
+  // chapters 表存原文，chapters_fts 存 bigram 化的 token 序列（unicode61 按空格分词）
   Future<void> insertAll(int bookId, List<ParsedChapter> chapters) async {
     await _db.transaction((txn) async {
       for (var i = 0; i < chapters.length; i++) {
@@ -98,12 +100,14 @@ class ChapterDao {
           'title': c.title,
           'start_char': c.startChar,
           'end_char': c.endChar,
+          'content': c.content,
         });
-        // FTS5 行用同一个 rowid，便于 join
+        // FTS5 行用同一个 rowid，便于 join；title/search 都做 bigram 化
+        // 这样用户搜 "你好"（2 字）能命中标题或正文里的连续 "你好"
         await txn.insert('chapters_fts', {
           'rowid': id,
-          'title': c.title,
-          'content': c.content,
+          'title': toBigramTokens(c.title),
+          'search': toBigramTokens(c.content),
         });
       }
     });
@@ -198,8 +202,14 @@ class SearchDao {
   Database get _db => AppDatabase.instance.db;
 
   // 跨书全文搜索：限制返回 100 条以避免 UI 卡顿
-  Future<List<SearchHit>> search(String query) async {
-    if (query.trim().isEmpty) return const [];
+  // [ftsQuery] 已 bigram 化的 FTS5 MATCH 表达式
+  // [rawQuery] 用户原始输入，用于在 Dart 侧从 chapters.content 生成 snippet
+  // （FTS5 内部存的是 bigram 序列，自带 snippet() 出来的位置不映射到原文，所以自己做）
+  Future<List<SearchHit>> search({
+    required String ftsQuery,
+    required String rawQuery,
+  }) async {
+    if (ftsQuery.trim().isEmpty) return const [];
     final rows = await _db.rawQuery(
       '''
       SELECT
@@ -208,7 +218,7 @@ class SearchDao {
         c.id AS chapter_id,
         c.chapter_index AS chapter_index,
         c.title AS chapter_title,
-        snippet(chapters_fts, 1, '<mark>', '</mark>', '...', 16) AS snippet
+        c.content AS chapter_content
       FROM chapters_fts
       JOIN chapters c ON chapters_fts.rowid = c.id
       JOIN books b ON c.book_id = b.id
@@ -216,7 +226,7 @@ class SearchDao {
       ORDER BY rank
       LIMIT 100
       ''',
-      [query],
+      [ftsQuery],
     );
     return rows
         .map((r) => SearchHit(
@@ -225,7 +235,7 @@ class SearchDao {
               chapterId: r['chapter_id'] as int,
               chapterIndex: r['chapter_index'] as int,
               chapterTitle: r['chapter_title'] as String,
-              snippet: r['snippet'] as String,
+              snippet: makeSnippet(r['chapter_content'] as String, rawQuery),
             ))
         .toList();
   }
