@@ -13,37 +13,125 @@ class LibraryPage extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final asyncState = ref.watch(libraryProvider);
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('书架'),
-        actions: [
-          IconButton(
-            tooltip: '搜索',
-            icon: const Icon(Icons.search),
-            onPressed: () => Navigator.of(context).push(
-              MaterialPageRoute(builder: (_) => const SearchPage()),
-            ),
-          ),
-          IconButton(
-            tooltip: '设置',
-            icon: const Icon(Icons.settings),
-            onPressed: () => Navigator.of(context).push(
-              MaterialPageRoute(builder: (_) => const SettingsPage()),
-            ),
-          ),
-        ],
-      ),
-      body: asyncState.when(
-        loading: () => const Center(child: CircularProgressIndicator()),
-        error: (e, _) => Center(child: Text('加载书架失败：$e')),
-        data: (state) => _Body(state: state),
-      ),
-      floatingActionButton: FloatingActionButton.extended(
-        icon: const Icon(Icons.add),
-        label: const Text('导入 txt'),
-        onPressed: () => ref.read(libraryProvider.notifier).pickAndImport(),
+    // 用 maybeWhen 取出当前状态，只为决定 AppBar / FAB / 返回键行为
+    final state = asyncState.value;
+    final selectionMode = state?.selectionMode ?? false;
+    final selectedCount = state?.selectedIds.length ?? 0;
+
+    return PopScope(
+      // 多选模式下：拦截系统返回键，先退出多选模式而不是关闭页面
+      canPop: !selectionMode,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop && selectionMode) {
+          ref.read(libraryProvider.notifier).exitSelection();
+        }
+      },
+      child: Scaffold(
+        appBar: selectionMode
+            ? _SelectionAppBar(selectedCount: selectedCount)
+            : _NormalAppBar(),
+        body: asyncState.when(
+          loading: () => const Center(child: CircularProgressIndicator()),
+          error: (e, _) => Center(child: Text('加载书架失败：$e')),
+          data: (state) => _Body(state: state),
+        ),
+        floatingActionButton: selectionMode
+            ? null
+            : FloatingActionButton.extended(
+                icon: const Icon(Icons.add),
+                label: const Text('导入书籍'),
+                onPressed: () =>
+                    ref.read(libraryProvider.notifier).pickAndImport(),
+              ),
       ),
     );
+  }
+}
+
+// 普通模式 AppBar：搜索 + 设置
+class _NormalAppBar extends StatelessWidget implements PreferredSizeWidget {
+  @override
+  Size get preferredSize => const Size.fromHeight(kToolbarHeight);
+
+  @override
+  Widget build(BuildContext context) {
+    return AppBar(
+      title: const Text('书架'),
+      actions: [
+        IconButton(
+          tooltip: '搜索',
+          icon: const Icon(Icons.search),
+          onPressed: () => Navigator.of(context).push(
+            MaterialPageRoute(builder: (_) => const SearchPage()),
+          ),
+        ),
+        IconButton(
+          tooltip: '设置',
+          icon: const Icon(Icons.settings),
+          onPressed: () => Navigator.of(context).push(
+            MaterialPageRoute(builder: (_) => const SettingsPage()),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+// 多选模式 AppBar：取消 / 已选数量 / 全选 / 删除
+class _SelectionAppBar extends ConsumerWidget implements PreferredSizeWidget {
+  final int selectedCount;
+  const _SelectionAppBar({required this.selectedCount});
+
+  @override
+  Size get preferredSize => const Size.fromHeight(kToolbarHeight);
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final notifier = ref.read(libraryProvider.notifier);
+    return AppBar(
+      leading: IconButton(
+        tooltip: '退出多选',
+        icon: const Icon(Icons.close),
+        onPressed: notifier.exitSelection,
+      ),
+      title: Text('已选 $selectedCount 本'),
+      actions: [
+        IconButton(
+          tooltip: '全选',
+          icon: const Icon(Icons.select_all),
+          onPressed: notifier.selectAll,
+        ),
+        IconButton(
+          tooltip: '删除',
+          icon: const Icon(Icons.delete_outline),
+          onPressed: selectedCount == 0
+              ? null
+              : () => _confirmAndDelete(context, ref, selectedCount),
+        ),
+      ],
+    );
+  }
+
+  Future<void> _confirmAndDelete(
+      BuildContext context, WidgetRef ref, int count) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('批量删除'),
+        content: Text('确定删除选中的 $count 本书及其阅读进度？'),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('取消')),
+          TextButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('删除')),
+        ],
+      ),
+    );
+    if (confirmed == true) {
+      await ref.read(libraryProvider.notifier).deleteSelected();
+    }
   }
 }
 
@@ -62,7 +150,14 @@ class _Body extends ConsumerWidget {
             padding: const EdgeInsets.fromLTRB(16, 8, 16, 96),
             itemCount: state.books.length,
             separatorBuilder: (_, _) => const Divider(height: 1),
-            itemBuilder: (context, i) => _BookTile(book: state.books[i]),
+            itemBuilder: (context, i) {
+              final book = state.books[i];
+              return _BookTile(
+                book: book,
+                selectionMode: state.selectionMode,
+                selected: state.selectedIds.contains(book.id),
+              );
+            },
           ),
         if (state.importing != null)
           Positioned(
@@ -94,9 +189,15 @@ class _Body extends ConsumerWidget {
                 padding: const EdgeInsets.all(12),
                 child: Row(
                   children: [
-                    const Icon(Icons.error_outline, color: Colors.red),
+                    // 背景固定浅红 → 图标和文字都用深红，保证深/浅主题下对比度一致
+                    Icon(Icons.error_outline, color: Colors.red.shade900),
                     const SizedBox(width: 8),
-                    Expanded(child: Text(state.error!)),
+                    Expanded(
+                      child: Text(
+                        state.error!,
+                        style: TextStyle(color: Colors.red.shade900),
+                      ),
+                    ),
                   ],
                 ),
               ),
@@ -119,7 +220,7 @@ class _EmptyHint extends StatelessWidget {
           Icon(Icons.menu_book_outlined,
               size: 96, color: Colors.grey.shade400),
           const SizedBox(height: 16),
-          const Text('书架为空，点击下方按钮导入 txt 文件'),
+          const Text('书架为空，点击下方按钮导入 txt 或 epub 文件'),
         ],
       ),
     );
@@ -128,12 +229,25 @@ class _EmptyHint extends StatelessWidget {
 
 class _BookTile extends ConsumerWidget {
   final Book book;
-  const _BookTile({required this.book});
+  final bool selectionMode;
+  final bool selected;
+  const _BookTile({
+    required this.book,
+    required this.selectionMode,
+    required this.selected,
+  });
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    final notifier = ref.read(libraryProvider.notifier);
     return ListTile(
-      leading: const Icon(Icons.menu_book, size: 32),
+      // 多选模式下用 Checkbox 替代图标，直观显示选中态
+      leading: selectionMode
+          ? Checkbox(
+              value: selected,
+              onChanged: (_) => notifier.toggleSelect(book.id),
+            )
+          : const Icon(Icons.menu_book, size: 32),
       title: Text(
         book.title,
         maxLines: 1,
@@ -143,22 +257,34 @@ class _BookTile extends ConsumerWidget {
         '${_formatChars(book.totalChars)}  ·  '
         '${book.lastReadAt == null ? "未读" : "上次阅读 ${_formatTime(book.lastReadAt!)}"}',
       ),
-      trailing: PopupMenuButton<String>(
-        itemBuilder: (_) => const [
-          PopupMenuItem(value: 'delete', child: Text('删除')),
-        ],
-        onSelected: (v) async {
-          if (v == 'delete') {
-            final confirmed = await _confirmDelete(context, book.title);
-            if (confirmed && context.mounted) {
-              await ref.read(libraryProvider.notifier).deleteBook(book);
-            }
-          }
-        },
-      ),
-      onTap: () => Navigator.of(context).push(
-        MaterialPageRoute(builder: (_) => ReaderPage(bookId: book.id)),
-      ),
+      // 多选模式下隐藏单本菜单，避免操作冲突
+      trailing: selectionMode
+          ? null
+          : PopupMenuButton<String>(
+              itemBuilder: (_) => const [
+                PopupMenuItem(value: 'delete', child: Text('删除')),
+              ],
+              onSelected: (v) async {
+                if (v == 'delete') {
+                  final confirmed = await _confirmDelete(context, book.title);
+                  if (confirmed && context.mounted) {
+                    await notifier.deleteBook(book);
+                  }
+                }
+              },
+            ),
+      onTap: () {
+        if (selectionMode) {
+          notifier.toggleSelect(book.id);
+        } else {
+          Navigator.of(context).push(
+            MaterialPageRoute(builder: (_) => ReaderPage(bookId: book.id)),
+          );
+        }
+      },
+      // 长按进入多选模式（普通模式下）；已在多选模式则忽略
+      onLongPress: selectionMode ? null : () => notifier.enterSelection(book.id),
+      selected: selected,
     );
   }
 

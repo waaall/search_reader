@@ -14,6 +14,7 @@
 | 全文索引 | **SQLite FTS5（trigram tokenizer）** | 内置无外部依赖，trigram 对中文检索效果好 |
 | 编码检测 | **charset_converter + 自实现策略** | 支持 GBK/GB18030/UTF-8/UTF-16 |
 | 文件选择 | **file_picker** | 跨平台 + Android SAF 兼容 |
+| epub 解析 | **epubx + html + archive** | epubx 读 epub，html 抽纯文本，archive 处理"解压目录形式"的 epub |
 | 路径管理 | **path_provider** | 跨平台沙盒目录抽象 |
 | 国际化 | **intl + flutter_localizations** | MVP 仅中文，但留好基础设施 |
 
@@ -63,8 +64,9 @@ lib/
 │   ├── encoding/
 │   │   └── text_decoder.dart      # 编码检测与解码
 │   └── parser/
-│       ├── book_format.dart       # 抽象接口（为 epub 预留）
-│       └── txt_parser.dart        # txt 解析（章节切分）
+│       ├── book_format.dart       # 抽象接口
+│       ├── txt_parser.dart        # txt 解析（章节切分）
+│       └── epub_parser.dart       # epub 解析（HTML → 纯文本，兼容目录形式）
 │
 ├── domain/
 │   ├── book.dart                  # Book 实体
@@ -280,7 +282,9 @@ LIMIT 100;
 ```
 导入流程：
 1. file_picker 拿到原文件路径（Android 走 SAF，桌面端为绝对路径）
-2. 把内容拷贝到 path_provider.getApplicationDocumentsDirectory()/books/{uuid}.txt
+2. 持久化到 path_provider.getApplicationDocumentsDirectory()/books/{uuid}.<ext>
+   - txt：原文件 copy，保留原编码（reader 读盘时再解码）
+   - epub：解析后只把抽取出的纯文本以 utf-8 .txt 写入（原 epub 不落盘）
 3. 数据库 books.file_path 存相对路径（不存绝对路径，避免沙盒迁移失效）
 4. 后续读取时：appDocs + 相对路径 → 绝对路径
 ```

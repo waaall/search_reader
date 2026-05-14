@@ -30,6 +30,13 @@ dependencies:
   # 生成文件 UUID（导入时给文件起唯一名）
   uuid: ^4.5.1
 
+  # epub 解析（导入时把 epub 章节抽成纯文本）
+  epubx: ^4.0.0
+  # HTML → 纯文本（epub 章节内容是 XHTML 片段）
+  html: ^0.15.6
+  # zip 打包：处理"解压目录形式的 epub"，现场打回 zip 喂给 epubx
+  archive: ^3.6.0
+
 dev_dependencies:
   flutter_test:
     sdk: flutter

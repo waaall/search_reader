@@ -28,6 +28,21 @@ class BookStorage {
     return p.join(_booksDir, fileName);
   }
 
+  // 把任意文本写入沙盒（utf-8 编码），返回相对路径
+  // 用于 epub 等需要先解析再持久化的格式：原 epub 不存，只存抽取后的纯文本
+  // reader 后续可统一按 txt 流程读取
+  static Future<String> writeTextFile(String content) async {
+    final root = await _root();
+    final targetDir = Directory(p.join(root.path, _booksDir));
+    if (!targetDir.existsSync()) {
+      await targetDir.create(recursive: true);
+    }
+    final fileName = '${_uuid.v4()}.txt';
+    final targetPath = p.join(targetDir.path, fileName);
+    await File(targetPath).writeAsString(content);
+    return p.join(_booksDir, fileName);
+  }
+
   // 相对路径 → 绝对路径
   static Future<String> resolveAbsolute(String relativePath) async {
     final root = await _root();

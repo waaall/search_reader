@@ -254,6 +254,39 @@ class _PaginatedViewState extends State<_PaginatedView> {
             ),
           ),
         ),
+        // 透明手势层
+        // 菜单隐藏：左/中/右 三栏（上一页 / 切换菜单 / 下一页）
+        // 菜单显示：整层响应点击，收起菜单回到阅读
+        // 放在顶/底栏之前 → 顶/底栏 z 序更高，按钮点击优先命中，不会被手势层吞掉
+        Positioned.fill(
+          child: widget.menuVisible
+              ? GestureDetector(
+                  behavior: HitTestBehavior.translucent,
+                  onTap: widget.onTapCenter,
+                )
+              : Row(
+                  children: [
+                    Expanded(
+                      child: GestureDetector(
+                        behavior: HitTestBehavior.translucent,
+                        onTap: _goPrev,
+                      ),
+                    ),
+                    Expanded(
+                      child: GestureDetector(
+                        behavior: HitTestBehavior.translucent,
+                        onTap: widget.onTapCenter,
+                      ),
+                    ),
+                    Expanded(
+                      child: GestureDetector(
+                        behavior: HitTestBehavior.translucent,
+                        onTap: _goNext,
+                      ),
+                    ),
+                  ],
+                ),
+        ),
         // 顶部章节标题（菜单可见时显示）
         if (widget.menuVisible)
           Positioned(
@@ -318,32 +351,6 @@ class _PaginatedViewState extends State<_PaginatedView> {
                       onTap: widget.onOpenSettings),
                 ],
               ),
-            ),
-          ),
-        // 透明手势层（覆盖在上面，但顶部/底部菜单 z 序更高）
-        if (!widget.menuVisible)
-          Positioned.fill(
-            child: Row(
-              children: [
-                Expanded(
-                  child: GestureDetector(
-                    behavior: HitTestBehavior.translucent,
-                    onTap: _goPrev,
-                  ),
-                ),
-                Expanded(
-                  child: GestureDetector(
-                    behavior: HitTestBehavior.translucent,
-                    onTap: widget.onTapCenter,
-                  ),
-                ),
-                Expanded(
-                  child: GestureDetector(
-                    behavior: HitTestBehavior.translucent,
-                    onTap: _goNext,
-                  ),
-                ),
-              ],
             ),
           ),
       ],
