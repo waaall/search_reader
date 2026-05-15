@@ -17,6 +17,7 @@ class ReaderState {
   final int currentChapterIndex;
   final String currentChapterText;
   final int initialCharOffset; // 第一次进入页面时的章节内偏移
+  final int jumpToken; // 跳转计数：每次跳章/跳书签自增，用于强制阅读视图重建
 
   const ReaderState({
     required this.book,
@@ -24,6 +25,7 @@ class ReaderState {
     required this.currentChapterIndex,
     required this.currentChapterText,
     required this.initialCharOffset,
+    this.jumpToken = 0,
   });
 
   Chapter get currentChapter => chapters[currentChapterIndex];
@@ -34,6 +36,7 @@ class ReaderState {
     int? currentChapterIndex,
     String? currentChapterText,
     int? initialCharOffset,
+    int? jumpToken,
   }) {
     return ReaderState(
       book: book,
@@ -41,11 +44,12 @@ class ReaderState {
       currentChapterIndex: currentChapterIndex ?? this.currentChapterIndex,
       currentChapterText: currentChapterText ?? this.currentChapterText,
       initialCharOffset: initialCharOffset ?? this.initialCharOffset,
+      jumpToken: jumpToken ?? this.jumpToken,
     );
   }
 }
 
-class ReaderNotifier extends FamilyAsyncNotifier<ReaderState, int> {
+class ReaderNotifier extends AutoDisposeFamilyAsyncNotifier<ReaderState, int> {
   final BookDao _bookDao = BookDao();
   final ChapterDao _chapterDao = ChapterDao();
   final ProgressDao _progressDao = ProgressDao();
@@ -93,6 +97,7 @@ class ReaderNotifier extends FamilyAsyncNotifier<ReaderState, int> {
       currentChapterIndex: clamped,
       currentChapterText: text,
       initialCharOffset: charOffset,
+      jumpToken: cur.jumpToken + 1, // 自增以强制阅读视图按新位置重建
     ));
   }
 
@@ -141,7 +146,9 @@ class ReaderNotifier extends FamilyAsyncNotifier<ReaderState, int> {
   }
 }
 
+// autoDispose：退出阅读页后销毁 provider，
+// 重新进入时 build() 会重新从数据库读取阅读进度，确保定位到上次位置
 final readerProvider =
-    AsyncNotifierProvider.family<ReaderNotifier, ReaderState, int>(
+    AsyncNotifierProvider.autoDispose.family<ReaderNotifier, ReaderState, int>(
   ReaderNotifier.new,
 );

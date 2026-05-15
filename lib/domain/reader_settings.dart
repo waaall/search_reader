@@ -50,27 +50,40 @@ enum ReaderThemeMode {
   });
 }
 
+// 阅读模式：翻页 / 滚动
+enum ReadingMode {
+  paginated('翻页'),
+  scroll('滚动');
+
+  final String label;
+  const ReadingMode(this.label);
+}
+
 @immutable
 class ReaderSettings {
   final FontSizeLevel fontSize;
   final LineHeightLevel lineHeight;
   final ReaderThemeMode theme;
+  final ReadingMode readingMode;
 
   const ReaderSettings({
     this.fontSize = FontSizeLevel.medium,
     this.lineHeight = LineHeightLevel.normal,
     this.theme = ReaderThemeMode.light,
+    this.readingMode = ReadingMode.paginated,
   });
 
   ReaderSettings copyWith({
     FontSizeLevel? fontSize,
     LineHeightLevel? lineHeight,
     ReaderThemeMode? theme,
+    ReadingMode? readingMode,
   }) {
     return ReaderSettings(
       fontSize: fontSize ?? this.fontSize,
       lineHeight: lineHeight ?? this.lineHeight,
       theme: theme ?? this.theme,
+      readingMode: readingMode ?? this.readingMode,
     );
   }
 }

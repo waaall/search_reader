@@ -54,6 +54,13 @@ class SettingsPage extends ConsumerWidget {
           labelOf: (v) => v.label,
           onChanged: notifier.updateTheme,
         ),
+        _section('阅读模式'),
+        _segmentedEnum<ReadingMode>(
+          values: ReadingMode.values,
+          current: s.readingMode,
+          labelOf: (v) => v.label,
+          onChanged: notifier.updateReadingMode,
+        ),
         const SizedBox(height: 24),
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: 16),

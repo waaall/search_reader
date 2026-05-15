@@ -73,6 +73,10 @@ class _ReaderShellState extends ConsumerState<_ReaderShell> {
   bool _menuVisible = false;
   bool _didJumpToInitialChapter = false;
 
+  // 章节内最近上报的阅读偏移：翻页/滚动时更新（非响应式，不触发重建）。
+  // 切换阅读模式、改字号等导致视图重建时用它保留当前位置；发生跳转后置空。
+  int? _lastCharOffset;
+
   // 内边距：上下留出顶部菜单与页码空间
   static const _padding = EdgeInsets.fromLTRB(20, 48, 20, 32);
 
@@ -93,9 +97,20 @@ class _ReaderShellState extends ConsumerState<_ReaderShell> {
   }
 
   @override
+  void didUpdateWidget(_ReaderShell oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // 发生跳转（换章 / 跳书签）后清除阅读偏移记录，改用 state 的目标偏移定位
+    if (oldWidget.state.jumpToken != widget.state.jumpToken) {
+      _lastCharOffset = null;
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
     final state = widget.state;
     final settings = widget.settings;
+    // 定位偏移：优先用最近阅读偏移（保留切模式/改设置前的位置），否则用初始偏移
+    final effectiveOffset = _lastCharOffset ?? state.initialCharOffset;
     final textStyle = TextStyle(
       color: settings.theme.foreground,
       fontSize: settings.fontSize.size,
@@ -125,7 +140,56 @@ class _ReaderShellState extends ConsumerState<_ReaderShell> {
       body: SafeArea(
         child: LayoutBuilder(
           builder: (context, constraints) {
-            // 分页：每次 build 重新计算（章节切换或字号改变都会触发）
+            // 公共回调参数（两种模式共用）
+            void tapCenter() => setState(() => _menuVisible = !_menuVisible);
+            void openChapters() => Scaffold.of(context).openDrawer();
+            void openSettings() => Navigator.of(context)
+                .push(MaterialPageRoute(builder: (_) => const SettingsPage()));
+            void goBack() => Navigator.of(context).pop();
+            final onPrevChapter = state.hasPrev
+                ? () => ref
+                    .read(readerProvider(widget.bookId).notifier)
+                    .prevChapter()
+                : null;
+            final onNextChapter = state.hasNext
+                ? () => ref
+                    .read(readerProvider(widget.bookId).notifier)
+                    .nextChapter()
+                : null;
+            // 记录最近阅读偏移并写库：非响应式更新 _lastCharOffset，
+            // 避免每次翻页都触发 _ReaderShell 重建与重新分页
+            void reportOffset(int offset) {
+              _lastCharOffset = offset;
+              ref
+                  .read(readerProvider(widget.bookId).notifier)
+                  .saveProgress(offset);
+            }
+
+            // 滚动模式：无需分页计算
+            if (settings.readingMode == ReadingMode.scroll) {
+              return _ScrollView(
+                key: ValueKey(
+                    's-${state.book.id}-${state.currentChapterIndex}-${state.jumpToken}-${settings.fontSize.name}-${settings.lineHeight.name}'),
+                chapterText: state.currentChapterText,
+                padding: _padding,
+                textStyle: textStyle,
+                themeFg: settings.theme.foreground,
+                chapterTitle: state.currentChapter.title,
+                menuVisible: _menuVisible,
+                initialCharOffset: effectiveOffset,
+                onCharOffsetChanged: reportOffset,
+                onTapCenter: tapCenter,
+                onPrevChapter: onPrevChapter,
+                onNextChapter: onNextChapter,
+                onOpenChapters: openChapters,
+                onOpenSettings: openSettings,
+                onAddBookmark: (charOffset) =>
+                    _addBookmark(state.currentChapterIndex, charOffset),
+                onBack: goBack,
+              );
+            }
+
+            // 翻页模式：仅此分支需要分页计算
             final contentWidth = constraints.maxWidth - _padding.horizontal;
             final contentHeight = constraints.maxHeight - _padding.vertical;
             final pagination = TextPaginator.paginate(
@@ -136,7 +200,7 @@ class _ReaderShellState extends ConsumerState<_ReaderShell> {
             );
             return _PaginatedView(
               key: ValueKey(
-                  'p-${state.book.id}-${state.currentChapterIndex}-${settings.fontSize.name}-${settings.lineHeight.name}-${constraints.maxWidth.toInt()}x${constraints.maxHeight.toInt()}'),
+                  'p-${state.book.id}-${state.currentChapterIndex}-${state.jumpToken}-${settings.fontSize.name}-${settings.lineHeight.name}-${constraints.maxWidth.toInt()}x${constraints.maxHeight.toInt()}'),
               pagination: pagination,
               padding: _padding,
               textStyle: textStyle,
@@ -144,32 +208,17 @@ class _ReaderShellState extends ConsumerState<_ReaderShell> {
               chapterTitle: state.currentChapter.title,
               menuVisible: _menuVisible,
               chapterBookmarkOffsets: chapterBookmarkOffsets,
-              initialPage: pagination
-                  .pageOfOffset(state.initialCharOffset),
-              onPageChanged: (pageIndex) {
-                final offset = pagination.offsetOfPage(pageIndex);
-                ref
-                    .read(readerProvider(widget.bookId).notifier)
-                    .saveProgress(offset);
-              },
-              onTapCenter: () =>
-                  setState(() => _menuVisible = !_menuVisible),
-              onPrevChapter: state.hasPrev
-                  ? () => ref
-                      .read(readerProvider(widget.bookId).notifier)
-                      .prevChapter()
-                  : null,
-              onNextChapter: state.hasNext
-                  ? () => ref
-                      .read(readerProvider(widget.bookId).notifier)
-                      .nextChapter()
-                  : null,
-              onOpenChapters: () => Scaffold.of(context).openDrawer(),
-              onOpenSettings: () => Navigator.of(context).push(
-                  MaterialPageRoute(builder: (_) => const SettingsPage())),
+              initialPage: pagination.pageOfOffset(effectiveOffset),
+              onPageChanged: (pageIndex) =>
+                  reportOffset(pagination.offsetOfPage(pageIndex)),
+              onTapCenter: tapCenter,
+              onPrevChapter: onPrevChapter,
+              onNextChapter: onNextChapter,
+              onOpenChapters: openChapters,
+              onOpenSettings: openSettings,
               onAddBookmark: (charOffset) =>
                   _addBookmark(state.currentChapterIndex, charOffset),
-              onBack: () => Navigator.of(context).pop(),
+              onBack: goBack,
             );
           },
         ),
@@ -479,6 +528,210 @@ class _PaginatedViewState extends State<_PaginatedView> {
           color: disabled ? Colors.grey : Colors.white, size: 20),
       label: Text(label,
           style: TextStyle(color: disabled ? Colors.grey : Colors.white)),
+    );
+  }
+}
+
+// ─── 滚动阅读视图 ────────────────────────────────────────────────
+
+class _ScrollView extends StatefulWidget {
+  final String chapterText;
+  final EdgeInsets padding;
+  final TextStyle textStyle;
+  final Color themeFg;
+  final String chapterTitle;
+  final bool menuVisible;
+  final int initialCharOffset;
+  final void Function(int) onCharOffsetChanged;
+  final VoidCallback onTapCenter;
+  final VoidCallback? onPrevChapter;
+  final VoidCallback? onNextChapter;
+  final VoidCallback onOpenChapters;
+  final VoidCallback onOpenSettings;
+  final void Function(int charOffset) onAddBookmark;
+  final VoidCallback onBack;
+
+  const _ScrollView({
+    super.key,
+    required this.chapterText,
+    required this.padding,
+    required this.textStyle,
+    required this.themeFg,
+    required this.chapterTitle,
+    required this.menuVisible,
+    required this.initialCharOffset,
+    required this.onCharOffsetChanged,
+    required this.onTapCenter,
+    required this.onPrevChapter,
+    required this.onNextChapter,
+    required this.onOpenChapters,
+    required this.onOpenSettings,
+    required this.onAddBookmark,
+    required this.onBack,
+  });
+
+  @override
+  State<_ScrollView> createState() => _ScrollViewState();
+}
+
+class _ScrollViewState extends State<_ScrollView> {
+  late final ScrollController _ctrl;
+  // 阅读进度百分比：用 ValueNotifier 单独驱动底部百分比刷新，
+  // 避免滚动时 setState 重建整个视图（含大段正文 Text）
+  final ValueNotifier<double> _progress = ValueNotifier(0.0);
+
+  @override
+  void initState() {
+    super.initState();
+    _ctrl = ScrollController();
+    _ctrl.addListener(_onScroll);
+    // 首帧渲染完成后按字符偏移比例滚动到初始位置
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !_ctrl.hasClients) return;
+      final max = _ctrl.position.maxScrollExtent;
+      if (max > 0 && widget.chapterText.isNotEmpty) {
+        final ratio = widget.initialCharOffset / widget.chapterText.length;
+        _ctrl.jumpTo((ratio * max).clamp(0.0, max));
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    _progress.dispose();
+    super.dispose();
+  }
+
+  void _onScroll() {
+    if (!_ctrl.hasClients) return;
+    final max = _ctrl.position.maxScrollExtent;
+    if (max <= 0) return;
+    final p = (_ctrl.offset / max).clamp(0.0, 1.0);
+    if ((p - _progress.value).abs() > 0.001) _progress.value = p;
+  }
+
+  int get _currentCharOffset {
+    if (!_ctrl.hasClients) return widget.initialCharOffset;
+    final max = _ctrl.position.maxScrollExtent;
+    if (max <= 0) return 0;
+    final ratio = (_ctrl.offset / max).clamp(0.0, 1.0);
+    return (ratio * widget.chapterText.length).round();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Stack(
+      children: [
+        // 连续滚动文本；停止滚动时保存进度
+        NotificationListener<ScrollEndNotification>(
+          onNotification: (_) {
+            widget.onCharOffsetChanged(_currentCharOffset);
+            return false;
+          },
+          child: SingleChildScrollView(
+            controller: _ctrl,
+            padding: widget.padding,
+            child: Text(widget.chapterText, style: widget.textStyle),
+          ),
+        ),
+        // 透明手势层：点击任意处切换菜单
+        // translucent 让下层滚动手势仍能响应（点击=切菜单，拖动=滚动）
+        // 放在顶/底栏之前 → 顶/底栏 z 序更高，按钮点击优先命中
+        Positioned.fill(
+          child: GestureDetector(
+            behavior: HitTestBehavior.translucent,
+            onTap: widget.onTapCenter,
+          ),
+        ),
+        // 顶部章节标题（菜单可见时显示）
+        if (widget.menuVisible)
+          Positioned(
+            top: 0,
+            left: 0,
+            right: 0,
+            child: Container(
+              color: Colors.black.withValues(alpha: 0.5),
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+              child: Row(
+                children: [
+                  IconButton(
+                    icon:
+                        const Icon(Icons.arrow_back, color: Colors.white),
+                    onPressed: widget.onBack,
+                  ),
+                  Expanded(
+                    child: Text(
+                      widget.chapterTitle,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(color: Colors.white),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        // 底部阅读进度百分比：仅此小部件随滚动刷新
+        Positioned(
+          bottom: 8,
+          left: 0,
+          right: 0,
+          child: Center(
+            child: ValueListenableBuilder<double>(
+              valueListenable: _progress,
+              builder: (_, progress, _) => Text(
+                '${(progress * 100).toStringAsFixed(0)}%',
+                style: TextStyle(
+                  color: widget.themeFg.withValues(alpha: 0.5),
+                  fontSize: 12,
+                ),
+              ),
+            ),
+          ),
+        ),
+        // 底部菜单（菜单可见时显示）
+        if (widget.menuVisible)
+          Positioned(
+            bottom: 0,
+            left: 0,
+            right: 0,
+            child: Container(
+              color: Colors.black.withValues(alpha: 0.7),
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceAround,
+                children: [
+                  _menuBtn(Icons.skip_previous, '上一章',
+                      onTap: widget.onPrevChapter),
+                  _menuBtn(Icons.skip_next, '下一章',
+                      onTap: widget.onNextChapter),
+                  _menuBtn(Icons.list, '目录和书签',
+                      onTap: widget.onOpenChapters),
+                  _menuBtn(Icons.bookmark_add_outlined, '添加书签',
+                      onTap: () =>
+                          widget.onAddBookmark(_currentCharOffset)),
+                  _menuBtn(Icons.text_fields, '设置',
+                      onTap: widget.onOpenSettings),
+                ],
+              ),
+            ),
+          ),
+      ],
+    );
+  }
+
+  Widget _menuBtn(IconData icon, String label, {VoidCallback? onTap}) {
+    final disabled = onTap == null;
+    return TextButton.icon(
+      onPressed: onTap,
+      icon: Icon(icon,
+          color: disabled ? Colors.grey : Colors.white, size: 20),
+      label: Text(label,
+          style:
+              TextStyle(color: disabled ? Colors.grey : Colors.white)),
     );
   }
 }

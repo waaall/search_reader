@@ -8,6 +8,7 @@ class _Keys {
   static const fontSize = 'reader.font_size';
   static const lineHeight = 'reader.line_height';
   static const theme = 'reader.theme';
+  static const readingMode = 'reader.reading_mode';
 }
 
 // 阅读器设置：在数据库 settings 表中持久化
@@ -19,6 +20,7 @@ class ReaderSettingsNotifier extends AsyncNotifier<ReaderSettings> {
     final fontSizeName = await _dao.get(_Keys.fontSize);
     final lineHeightName = await _dao.get(_Keys.lineHeight);
     final themeName = await _dao.get(_Keys.theme);
+    final readingModeName = await _dao.get(_Keys.readingMode);
 
     return ReaderSettings(
       fontSize: _parseEnum(FontSizeLevel.values, fontSizeName,
@@ -27,6 +29,8 @@ class ReaderSettingsNotifier extends AsyncNotifier<ReaderSettings> {
           fallback: LineHeightLevel.normal),
       theme: _parseEnum(ReaderThemeMode.values, themeName,
           fallback: ReaderThemeMode.light),
+      readingMode: _parseEnum(ReadingMode.values, readingModeName,
+          fallback: ReadingMode.paginated),
     );
   }
 
@@ -43,6 +47,11 @@ class ReaderSettingsNotifier extends AsyncNotifier<ReaderSettings> {
   Future<void> updateTheme(ReaderThemeMode theme) async {
     await _dao.set(_Keys.theme, theme.name);
     state = AsyncData(state.value!.copyWith(theme: theme));
+  }
+
+  Future<void> updateReadingMode(ReadingMode mode) async {
+    await _dao.set(_Keys.readingMode, mode.name);
+    state = AsyncData(state.value!.copyWith(readingMode: mode));
   }
 
   // enum.name 反序列化（找不到时回退默认）

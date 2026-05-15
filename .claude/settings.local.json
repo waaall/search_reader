@@ -3,7 +3,8 @@
     "allow": [
       "Bash(flutter --version)",
       "Bash(flutter test *)",
-      "Bash(flutter analyze *)"
+      "Bash(flutter analyze *)",
+      "Bash(flutter doctor *)"
     ]
   }
 }
