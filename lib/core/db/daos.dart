@@ -1,6 +1,7 @@
 import 'package:sqflite/sqflite.dart';
 
 import '../../domain/book.dart';
+import '../../domain/bookmark.dart';
 import '../../domain/chapter.dart';
 import '../../domain/reading_progress.dart';
 import '../parser/book_format.dart';
@@ -154,6 +155,117 @@ class ProgressDao {
       progress.toRow(),
       conflictAlgorithm: ConflictAlgorithm.replace,
     );
+  }
+}
+
+// 跨书书签视图：bookmark + 书名 + 章节标题（用于全局书签页面展示）
+class BookmarkWithMeta {
+  final Bookmark bookmark;
+  final String bookTitle;
+  final String chapterTitle;
+
+  const BookmarkWithMeta({
+    required this.bookmark,
+    required this.bookTitle,
+    required this.chapterTitle,
+  });
+}
+
+class BookmarkDao {
+  Database get _db => AppDatabase.instance.db;
+
+  // 列出全部书签：按书分组（书名升序），同书内按章节 + 章节内位置升序
+  // chapter_title 用 LEFT JOIN 兜底（理论上 chapters 不会缺，但 LEFT JOIN 更鲁棒）
+  Future<List<BookmarkWithMeta>> listAll() async {
+    final rows = await _db.rawQuery('''
+      SELECT
+        bm.id, bm.book_id, bm.chapter_index, bm.char_offset, bm.note, bm.created_at,
+        b.title AS book_title,
+        c.title AS chapter_title
+      FROM bookmarks bm
+      JOIN books b ON b.id = bm.book_id
+      LEFT JOIN chapters c
+        ON c.book_id = bm.book_id AND c.chapter_index = bm.chapter_index
+      ORDER BY b.title ASC, bm.chapter_index ASC, bm.char_offset ASC
+    ''');
+    return rows
+        .map((r) => BookmarkWithMeta(
+              bookmark: Bookmark.fromRow({
+                'id': r['id'],
+                'book_id': r['book_id'],
+                'chapter_index': r['chapter_index'],
+                'char_offset': r['char_offset'],
+                'note': r['note'],
+                'created_at': r['created_at'],
+              }),
+              bookTitle: r['book_title'] as String,
+              chapterTitle: (r['chapter_title'] as String?) ?? '未知章节',
+            ))
+        .toList();
+  }
+
+  // 列出某本书的所有书签：按章节顺序、章节内位置升序
+  // 排序按位置而不是创建时间：用户在书签列表里看到的顺序与阅读顺序一致
+  Future<List<Bookmark>> listByBook(int bookId) async {
+    final rows = await _db.query(
+      'bookmarks',
+      where: 'book_id = ?',
+      whereArgs: [bookId],
+      orderBy: 'chapter_index ASC, char_offset ASC',
+    );
+    return rows.map(Bookmark.fromRow).toList();
+  }
+
+  // upsert：(book_id, chapter_index, char_offset) 已存在则覆盖 note 与 created_at
+  // 通过唯一索引 + ConflictAlgorithm.replace 实现，原子操作
+  // 返回插入/更新后的 Bookmark（带新 id）
+  Future<Bookmark> upsert({
+    required int bookId,
+    required int chapterIndex,
+    required int charOffset,
+    String? note,
+  }) async {
+    final now = DateTime.now();
+    final id = await _db.insert(
+      'bookmarks',
+      {
+        'book_id': bookId,
+        'chapter_index': chapterIndex,
+        'char_offset': charOffset,
+        'note': note,
+        'created_at': now.millisecondsSinceEpoch,
+      },
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
+    return Bookmark(
+      id: id,
+      bookId: bookId,
+      chapterIndex: chapterIndex,
+      charOffset: charOffset,
+      note: note,
+      createdAt: now,
+    );
+  }
+
+  Future<void> delete(int id) async {
+    await _db.delete('bookmarks', where: 'id = ?', whereArgs: [id]);
+  }
+
+  // 阅读器右上角图标判断：当前章节内 [start, end) 区间是否有书签
+  // end 不含，等同 char_offset < end
+  Future<List<Bookmark>> findInChapterRange({
+    required int bookId,
+    required int chapterIndex,
+    required int startOffset,
+    required int endOffset,
+  }) async {
+    final rows = await _db.query(
+      'bookmarks',
+      where:
+          'book_id = ? AND chapter_index = ? AND char_offset >= ? AND char_offset < ?',
+      whereArgs: [bookId, chapterIndex, startOffset, endOffset],
+    );
+    return rows.map(Bookmark.fromRow).toList();
   }
 }
 

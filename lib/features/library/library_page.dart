@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../domain/book.dart';
+import '../bookmarks/all_bookmarks_page.dart';
 import '../reader/reader_page.dart';
 import '../search/search_page.dart';
 import '../settings/settings_page.dart';
@@ -48,7 +49,7 @@ class LibraryPage extends ConsumerWidget {
   }
 }
 
-// 普通模式 AppBar：搜索 + 设置
+// 普通模式 AppBar：搜索 + 书签 + 设置
 class _NormalAppBar extends StatelessWidget implements PreferredSizeWidget {
   @override
   Size get preferredSize => const Size.fromHeight(kToolbarHeight);
@@ -63,6 +64,13 @@ class _NormalAppBar extends StatelessWidget implements PreferredSizeWidget {
           icon: const Icon(Icons.search),
           onPressed: () => Navigator.of(context).push(
             MaterialPageRoute(builder: (_) => const SearchPage()),
+          ),
+        ),
+        IconButton(
+          tooltip: '书签',
+          icon: const Icon(Icons.bookmark_outline),
+          onPressed: () => Navigator.of(context).push(
+            MaterialPageRoute(builder: (_) => const AllBookmarksPage()),
           ),
         ),
         IconButton(

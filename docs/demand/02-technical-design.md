@@ -161,6 +161,22 @@ CREATE TABLE settings (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL
 );
+
+-- 书签：精确到章节内字符偏移；可选备注
+-- (book_id, chapter_index, char_offset) 唯一约束保证去重，重复加书签时 REPLACE 覆盖 note
+CREATE TABLE bookmarks (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  book_id INTEGER NOT NULL,
+  chapter_index INTEGER NOT NULL,
+  char_offset INTEGER NOT NULL,
+  note TEXT,
+  created_at INTEGER NOT NULL,
+  FOREIGN KEY (book_id) REFERENCES books(id) ON DELETE CASCADE
+);
+CREATE UNIQUE INDEX idx_bookmarks_pos
+  ON bookmarks(book_id, chapter_index, char_offset);
+CREATE INDEX idx_bookmarks_book
+  ON bookmarks(book_id, created_at DESC);
 ```
 
 **Schema 设计要点**：

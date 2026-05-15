@@ -4,9 +4,10 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../domain/reader_settings.dart';
 import '../settings/settings_page.dart';
 import '../settings/settings_provider.dart';
+import 'bookmark_provider.dart';
 import 'pagination.dart';
 import 'reader_provider.dart';
-import 'widgets/chapter_drawer.dart';
+import 'widgets/reader_drawer.dart';
 
 class ReaderPage extends ConsumerWidget {
   final int bookId;
@@ -101,13 +102,25 @@ class _ReaderShellState extends ConsumerState<_ReaderShell> {
       height: settings.lineHeight.multiplier,
     );
 
+    // 当前章节内的所有书签 offset 集合：传给 _PaginatedView 判断"当前页是否有书签"
+    final asyncBookmarks = ref.watch(bookmarksProvider(widget.bookId));
+    final chapterBookmarkOffsets = asyncBookmarks.maybeWhen(
+      data: (list) => list
+          .where((b) => b.chapterIndex == state.currentChapterIndex)
+          .map((b) => b.charOffset)
+          .toSet(),
+      orElse: () => <int>{},
+    );
+
     return Scaffold(
       backgroundColor: settings.theme.background,
-      drawer: ChapterDrawer(
+      drawer: ReaderDrawer(
+        bookId: widget.bookId,
         chapters: state.chapters,
-        currentIndex: state.currentChapterIndex,
-        onJump: (i) =>
-            ref.read(readerProvider(widget.bookId).notifier).jumpToChapter(i),
+        currentChapterIndex: state.currentChapterIndex,
+        onJump: (i, offset) => ref
+            .read(readerProvider(widget.bookId).notifier)
+            .jumpToChapter(i, charOffset: offset),
       ),
       body: SafeArea(
         child: LayoutBuilder(
@@ -130,6 +143,7 @@ class _ReaderShellState extends ConsumerState<_ReaderShell> {
               themeFg: settings.theme.foreground,
               chapterTitle: state.currentChapter.title,
               menuVisible: _menuVisible,
+              chapterBookmarkOffsets: chapterBookmarkOffsets,
               initialPage: pagination
                   .pageOfOffset(state.initialCharOffset),
               onPageChanged: (pageIndex) {
@@ -153,11 +167,78 @@ class _ReaderShellState extends ConsumerState<_ReaderShell> {
               onOpenChapters: () => Scaffold.of(context).openDrawer(),
               onOpenSettings: () => Navigator.of(context).push(
                   MaterialPageRoute(builder: (_) => const SettingsPage())),
+              onAddBookmark: (charOffset) =>
+                  _addBookmark(state.currentChapterIndex, charOffset),
               onBack: () => Navigator.of(context).pop(),
             );
           },
         ),
       ),
+    );
+  }
+
+  // 弹对话框输入备注（可留空），保存后自动收起菜单回到阅读
+  Future<void> _addBookmark(int chapterIndex, int charOffset) async {
+    final note = await showDialog<String?>(
+      context: context,
+      builder: (_) => const _BookmarkNoteDialog(),
+    );
+    if (note == null) return; // 用户取消
+    await ref.read(bookmarksProvider(widget.bookId).notifier).add(
+          chapterIndex: chapterIndex,
+          charOffset: charOffset,
+          note: note.isEmpty ? null : note,
+        );
+    if (mounted) {
+      setState(() => _menuVisible = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+            content: Text('书签已添加'), duration: Duration(seconds: 1)),
+      );
+    }
+  }
+}
+
+// 添加书签时的备注对话框：留空确认会保存为无备注
+class _BookmarkNoteDialog extends StatefulWidget {
+  const _BookmarkNoteDialog();
+
+  @override
+  State<_BookmarkNoteDialog> createState() => _BookmarkNoteDialogState();
+}
+
+class _BookmarkNoteDialogState extends State<_BookmarkNoteDialog> {
+  final _controller = TextEditingController();
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('添加书签'),
+      content: TextField(
+        controller: _controller,
+        autofocus: true,
+        maxLength: 80,
+        decoration: const InputDecoration(
+          hintText: '备注（可留空）',
+          border: OutlineInputBorder(),
+        ),
+        onSubmitted: (v) => Navigator.of(context).pop(v.trim()),
+      ),
+      actions: [
+        TextButton(
+            onPressed: () => Navigator.pop(context, null),
+            child: const Text('取消')),
+        TextButton(
+            onPressed: () =>
+                Navigator.pop(context, _controller.text.trim()),
+            child: const Text('保存')),
+      ],
     );
   }
 }
@@ -169,6 +250,8 @@ class _PaginatedView extends StatefulWidget {
   final Color themeFg;
   final String chapterTitle;
   final bool menuVisible;
+  // 当前章节内所有书签的字符偏移；用于判断"当前页是否含书签"
+  final Set<int> chapterBookmarkOffsets;
   final int initialPage;
   final void Function(int) onPageChanged;
   final VoidCallback onTapCenter;
@@ -176,6 +259,8 @@ class _PaginatedView extends StatefulWidget {
   final VoidCallback? onNextChapter;
   final VoidCallback onOpenChapters;
   final VoidCallback onOpenSettings;
+  // 加书签：传入当前页起始的章节内偏移
+  final void Function(int charOffset) onAddBookmark;
   final VoidCallback onBack;
 
   const _PaginatedView({
@@ -186,6 +271,7 @@ class _PaginatedView extends StatefulWidget {
     required this.themeFg,
     required this.chapterTitle,
     required this.menuVisible,
+    required this.chapterBookmarkOffsets,
     required this.initialPage,
     required this.onPageChanged,
     required this.onTapCenter,
@@ -193,6 +279,7 @@ class _PaginatedView extends StatefulWidget {
     required this.onNextChapter,
     required this.onOpenChapters,
     required this.onOpenSettings,
+    required this.onAddBookmark,
     required this.onBack,
   });
 
@@ -329,6 +416,18 @@ class _PaginatedViewState extends State<_PaginatedView> {
             ),
           ),
         ),
+        // 右上角书签标记：仅当前页范围内含书签时显示
+        // 菜单显示时让位给顶部栏，避免重叠
+        if (!widget.menuVisible && _currentPageHasBookmark())
+          Positioned(
+            top: 8,
+            right: 8,
+            child: Icon(
+              Icons.bookmark,
+              size: 20,
+              color: widget.themeFg.withValues(alpha: 0.6),
+            ),
+          ),
         // 底部菜单（菜单可见时显示）
         if (widget.menuVisible)
           Positioned(
@@ -345,8 +444,11 @@ class _PaginatedViewState extends State<_PaginatedView> {
                       onTap: widget.onPrevChapter),
                   _menuButton(Icons.skip_next, '下一章',
                       onTap: widget.onNextChapter),
-                  _menuButton(Icons.list, '目录',
+                  _menuButton(Icons.list, '目录和书签',
                       onTap: widget.onOpenChapters),
+                  _menuButton(Icons.bookmark_add_outlined, '添加书签',
+                      onTap: () => widget.onAddBookmark(
+                          widget.pagination.offsetOfPage(_currentPage))),
                   _menuButton(Icons.text_fields, '设置',
                       onTap: widget.onOpenSettings),
                 ],
@@ -355,6 +457,18 @@ class _PaginatedViewState extends State<_PaginatedView> {
           ),
       ],
     );
+  }
+
+  // 当前页 [pageStart, pageEnd) 范围内是否有书签
+  bool _currentPageHasBookmark() {
+    if (widget.chapterBookmarkOffsets.isEmpty) return false;
+    final pageStart = widget.pagination.offsetOfPage(_currentPage);
+    final pageEnd =
+        pageStart + widget.pagination.pages[_currentPage].length;
+    for (final off in widget.chapterBookmarkOffsets) {
+      if (off >= pageStart && off < pageEnd) return true;
+    }
+    return false;
   }
 
   Widget _menuButton(IconData icon, String label, {VoidCallback? onTap}) {

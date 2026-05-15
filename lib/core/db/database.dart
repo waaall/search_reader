@@ -6,8 +6,9 @@ import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 // 数据库版本：每次 Schema 变更需要 +1
 // v2：FTS5 trigram → unicode61 + bigram 化的 search 列；chapters 加 content 列
+// v3：新增 bookmarks 表（书签：章节内字符偏移 + 可选备注）
 // 升级策略：drop & recreate（旧数据不保留，需要重新导入）
-const int _kDbVersion = 2;
+const int _kDbVersion = 3;
 const String _kDbFileName = 'search_reader.db';
 
 // 单例数据库句柄：通过 [appDatabase] 全局访问
@@ -127,6 +128,24 @@ Future<void> _createSchema(Database db) async {
       value TEXT NOT NULL
     )
   ''');
+
+  // 书签表：(book_id, chapter_index, char_offset) 唯一约束保证去重
+  // 重复加书签时通过 ON CONFLICT REPLACE 覆盖 note 与 created_at
+  await db.execute('''
+    CREATE TABLE bookmarks (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      book_id INTEGER NOT NULL,
+      chapter_index INTEGER NOT NULL,
+      char_offset INTEGER NOT NULL,
+      note TEXT,
+      created_at INTEGER NOT NULL,
+      FOREIGN KEY (book_id) REFERENCES books(id) ON DELETE CASCADE
+    )
+  ''');
+  await db.execute(
+      'CREATE UNIQUE INDEX idx_bookmarks_pos ON bookmarks(book_id, chapter_index, char_offset)');
+  await db.execute(
+      'CREATE INDEX idx_bookmarks_book ON bookmarks(book_id, created_at DESC)');
 }
 
 // 删除全部表：升级时先 drop 再 recreate
@@ -134,6 +153,7 @@ Future<void> _createSchema(Database db) async {
 // settings 也一并清空：阅读偏好不算关键数据，重设成本低
 Future<void> _dropSchema(Database db) async {
   await db.execute('DROP TABLE IF EXISTS chapters_fts');
+  await db.execute('DROP TABLE IF EXISTS bookmarks');
   await db.execute('DROP TABLE IF EXISTS reading_progress');
   await db.execute('DROP TABLE IF EXISTS chapters');
   await db.execute('DROP TABLE IF EXISTS books');
