@@ -1,5 +1,3 @@
-import 'dart:io';
-
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
@@ -31,11 +29,10 @@ class AppDatabase {
   static Future<void> init() async {
     if (_instance != null) return;
 
-    // 桌面平台需要切到 ffi 后端；移动端使用平台默认实现
-    if (Platform.isLinux || Platform.isWindows || Platform.isMacOS) {
-      sqfliteFfiInit();
-      databaseFactory = databaseFactoryFfi;
-    }
+    // 全平台统一走 ffi 后端 + 自带 SQLite（由 sqlite3_flutter_libs 打包，含 FTS5）
+    // 不依赖系统 SQLite：Android 系统库未编入 FTS5 模块，建 FTS5 表会失败
+    sqfliteFfiInit();
+    databaseFactory = databaseFactoryFfi;
 
     final dir = await getApplicationDocumentsDirectory();
     final path = p.join(dir.path, _kDbFileName);

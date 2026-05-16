@@ -15,9 +15,10 @@ dependencies:
   # 状态管理
   flutter_riverpod: ^2.6.1
 
-  # 本地数据库（移动端）+ 桌面端 ffi 后端
-  sqflite: ^2.4.1
+  # 本地数据库：全平台统一 ffi 后端
   sqflite_common_ffi: ^2.3.4+4
+  # ffi 后端用的 SQLite 原生库（自带 FTS5，Android 系统 SQLite 没有该模块）
+  sqlite3_flutter_libs: ^0.6.0+eol
 
   # 跨平台文件选择 + 沙盒路径
   file_picker: ^8.1.6
