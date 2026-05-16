@@ -522,12 +522,30 @@ class _PaginatedViewState extends State<_PaginatedView> {
 
   Widget _menuButton(IconData icon, String label, {VoidCallback? onTap}) {
     final disabled = onTap == null;
-    return TextButton.icon(
-      onPressed: onTap,
-      icon: Icon(icon,
-          color: disabled ? Colors.grey : Colors.white, size: 20),
-      label: Text(label,
-          style: TextStyle(color: disabled ? Colors.grey : Colors.white)),
+    final color = disabled ? Colors.grey : Colors.white;
+    // 等宽分配 + 图标在上文字在下：窄屏（手机）下 5 个按钮也能完整显示
+    return Expanded(
+      child: TextButton(
+        onPressed: onTap,
+        style: TextButton.styleFrom(
+          padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 4),
+          minimumSize: Size.zero,
+          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, color: color, size: 22),
+            const SizedBox(height: 4),
+            Text(
+              label,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(color: color, fontSize: 11),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }
@@ -725,13 +743,30 @@ class _ScrollViewState extends State<_ScrollView> {
 
   Widget _menuBtn(IconData icon, String label, {VoidCallback? onTap}) {
     final disabled = onTap == null;
-    return TextButton.icon(
-      onPressed: onTap,
-      icon: Icon(icon,
-          color: disabled ? Colors.grey : Colors.white, size: 20),
-      label: Text(label,
-          style:
-              TextStyle(color: disabled ? Colors.grey : Colors.white)),
+    final color = disabled ? Colors.grey : Colors.white;
+    // 等宽分配 + 图标在上文字在下：窄屏（手机）下 5 个按钮也能完整显示
+    return Expanded(
+      child: TextButton(
+        onPressed: onTap,
+        style: TextButton.styleFrom(
+          padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 4),
+          minimumSize: Size.zero,
+          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, color: color, size: 22),
+            const SizedBox(height: 4),
+            Text(
+              label,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(color: color, fontSize: 11),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }

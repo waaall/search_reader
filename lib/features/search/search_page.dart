@@ -1,9 +1,11 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter_animate/flutter_animate.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/db/daos.dart';
+import '../../shared/theme/app_tokens.dart';
 import '../reader/reader_page.dart';
 import 'search_service.dart';
 
@@ -103,7 +105,8 @@ class _SearchPageState extends ConsumerState<SearchPage> {
     return ListView.separated(
       itemCount: _hits.length,
       separatorBuilder: (_, _) => const Divider(height: 1),
-      itemBuilder: (_, i) => _HitTile(hit: _hits[i]),
+      itemBuilder: (_, i) =>
+          _HitTile(hit: _hits[i]).animate().fadeIn(duration: AppMotion.fast),
     );
   }
 }

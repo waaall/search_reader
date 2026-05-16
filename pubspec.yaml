@@ -36,6 +36,8 @@ dependencies:
   html: ^0.15.6
   # zip 打包：处理"解压目录形式的 epub"，现场打回 zip 喂给 epubx
   archive: ^3.6.0
+  flex_color_scheme: ^8.4.0
+  flutter_animate: ^4.5.2
 
 dev_dependencies:
   flutter_test:

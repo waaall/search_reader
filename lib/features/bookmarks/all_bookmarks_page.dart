@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_animate/flutter_animate.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/db/daos.dart';
+import '../../shared/theme/app_tokens.dart';
 import '../reader/reader_page.dart';
 import 'all_bookmarks_provider.dart';
 
@@ -33,7 +35,11 @@ class AllBookmarksPage extends ConsumerWidget {
             },
             itemBuilder: (_, i) {
               final r = rows[i];
-              if (r is _BookHeaderRow) return _BookHeader(title: r.title);
+              if (r is _BookHeaderRow) {
+                return _BookHeader(title: r.title)
+                    .animate()
+                    .fadeIn(duration: AppMotion.fast);
+              }
               if (r is _BookmarkRow) {
                 return _BookmarkTile(
                   item: r.item,
@@ -48,7 +54,7 @@ class AllBookmarksPage extends ConsumerWidget {
                   ),
                   onDelete: () =>
                       ref.read(allBookmarksProvider.notifier).remove(r.item),
-                );
+                ).animate().fadeIn(duration: AppMotion.fast);
               }
               return const SizedBox.shrink();
             },
@@ -195,12 +201,15 @@ class _EmptyHint extends StatelessWidget {
         children: [
           Icon(Icons.bookmark_border,
               size: 96, color: Colors.grey.shade400),
-          const SizedBox(height: 16),
+          const SizedBox(height: AppSpacing.md),
           const Text('还没有书签\n阅读时点底部「书签」按钮可添加',
               textAlign: TextAlign.center,
               style: TextStyle(color: Colors.grey)),
         ],
-      ),
+      )
+          .animate()
+          .fadeIn(duration: AppMotion.normal)
+          .slideY(begin: 0.1, end: 0, duration: AppMotion.normal),
     );
   }
 }

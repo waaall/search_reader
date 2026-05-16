@@ -4,7 +4,9 @@
       "Bash(flutter --version)",
       "Bash(flutter test *)",
       "Bash(flutter analyze *)",
-      "Bash(flutter doctor *)"
+      "Bash(flutter doctor *)",
+      "Bash(flutter pub *)",
+      "Bash(flutter build *)"
     ]
   }
 }

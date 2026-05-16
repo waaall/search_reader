@@ -1,25 +1,35 @@
+import 'package:flex_color_scheme/flex_color_scheme.dart';
 import 'package:flutter/material.dart';
 
-// App 整体（书架/搜索/设置等非阅读页面）主题
-// 阅读器自身的主题在 ReaderSettings 中独立管理
-class AppTheme {
-  static ThemeData light() {
-    final base = ThemeData.light(useMaterial3: true);
-    return base.copyWith(
-      colorScheme: ColorScheme.fromSeed(
-        seedColor: const Color(0xFF6B5B95),
-        brightness: Brightness.light,
-      ),
-    );
-  }
+import 'app_tokens.dart';
 
-  static ThemeData dark() {
-    final base = ThemeData.dark(useMaterial3: true);
-    return base.copyWith(
-      colorScheme: ColorScheme.fromSeed(
-        seedColor: const Color(0xFF6B5B95),
-        brightness: Brightness.dark,
-      ),
-    );
-  }
+// App 整体主题（书架/搜索/设置等非阅读页面）。
+// 阅读器正文配色在 ReaderSettings 中独立管理，不受此处影响。
+class AppTheme {
+  // 品牌主色种子（沿用项目原取色）
+  static const _seed = Color(0xFF6B5B95);
+
+  // 组件级 sub-theme：圆角、卡片阴影等一次性铺到所有 Material 控件
+  static const _subThemes = FlexSubThemesData(
+    defaultRadius: AppRadius.md,
+    cardElevation: 1.0,
+    interactionEffects: true,
+    tintedDisabledControls: true,
+  );
+
+  static ThemeData light() => FlexThemeData.light(
+        colorScheme: ColorScheme.fromSeed(
+          seedColor: _seed,
+          brightness: Brightness.light,
+        ),
+        subThemesData: _subThemes,
+      );
+
+  static ThemeData dark() => FlexThemeData.dark(
+        colorScheme: ColorScheme.fromSeed(
+          seedColor: _seed,
+          brightness: Brightness.dark,
+        ),
+        subThemesData: _subThemes,
+      );
 }

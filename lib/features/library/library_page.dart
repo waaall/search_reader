@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_animate/flutter_animate.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../domain/book.dart';
+import '../../shared/theme/app_tokens.dart';
 import '../bookmarks/all_bookmarks_page.dart';
 import '../reader/reader_page.dart';
 import '../search/search_page.dart';
@@ -155,7 +157,8 @@ class _Body extends ConsumerWidget {
           const _EmptyHint()
         else
           ListView.separated(
-            padding: const EdgeInsets.fromLTRB(16, 8, 16, 96),
+            padding: const EdgeInsets.fromLTRB(
+                AppSpacing.md, AppSpacing.sm, AppSpacing.md, 96),
             itemCount: state.books.length,
             separatorBuilder: (_, _) => const Divider(height: 1),
             itemBuilder: (context, i) {
@@ -164,17 +167,25 @@ class _Body extends ConsumerWidget {
                 book: book,
                 selectionMode: state.selectionMode,
                 selected: state.selectedIds.contains(book.id),
-              );
+              )
+                  // 列表项依次淡入上滑；仅前若干项错峰，避免滚到远处时延迟过长
+                  .animate(delay: (i < 8 ? 40 * i : 0).ms)
+                  .fadeIn(duration: AppMotion.normal)
+                  .slideY(
+                      begin: 0.08,
+                      end: 0,
+                      duration: AppMotion.normal,
+                      curve: Curves.easeOut);
             },
           ),
         if (state.importing != null)
           Positioned(
-            left: 16,
-            right: 16,
+            left: AppSpacing.md,
+            right: AppSpacing.md,
             bottom: 90,
             child: Material(
               elevation: 4,
-              borderRadius: BorderRadius.circular(8),
+              borderRadius: BorderRadius.circular(AppRadius.sm),
               child: ListTile(
                 leading: const SizedBox(
                   width: 24,
@@ -183,23 +194,30 @@ class _Body extends ConsumerWidget {
                 ),
                 title: Text(state.importing!.label),
               ),
-            ),
+            )
+                .animate()
+                .fadeIn(duration: AppMotion.fast)
+                .slideY(
+                    begin: 0.5,
+                    end: 0,
+                    duration: AppMotion.fast,
+                    curve: Curves.easeOut),
           ),
         if (state.error != null)
           Positioned(
-            left: 16,
-            right: 16,
-            top: 16,
+            left: AppSpacing.md,
+            right: AppSpacing.md,
+            top: AppSpacing.md,
             child: Material(
               color: Colors.red.shade100,
-              borderRadius: BorderRadius.circular(8),
+              borderRadius: BorderRadius.circular(AppRadius.sm),
               child: Padding(
                 padding: const EdgeInsets.all(12),
                 child: Row(
                   children: [
                     // 背景固定浅红 → 图标和文字都用深红，保证深/浅主题下对比度一致
                     Icon(Icons.error_outline, color: Colors.red.shade900),
-                    const SizedBox(width: 8),
+                    const SizedBox(width: AppSpacing.sm),
                     Expanded(
                       child: Text(
                         state.error!,
@@ -209,7 +227,14 @@ class _Body extends ConsumerWidget {
                   ],
                 ),
               ),
-            ),
+            )
+                .animate()
+                .fadeIn(duration: AppMotion.fast)
+                .slideY(
+                    begin: -0.5,
+                    end: 0,
+                    duration: AppMotion.fast,
+                    curve: Curves.easeOut),
           ),
       ],
     );
@@ -227,10 +252,13 @@ class _EmptyHint extends StatelessWidget {
         children: [
           Icon(Icons.menu_book_outlined,
               size: 96, color: Colors.grey.shade400),
-          const SizedBox(height: 16),
+          const SizedBox(height: AppSpacing.md),
           const Text('书架为空，点击下方按钮导入 txt 或 epub 文件'),
         ],
-      ),
+      )
+          .animate()
+          .fadeIn(duration: AppMotion.normal)
+          .slideY(begin: 0.1, end: 0, duration: AppMotion.normal),
     );
   }
 }
