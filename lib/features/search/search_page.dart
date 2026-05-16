@@ -141,10 +141,17 @@ class _SnippetText extends StatelessWidget {
   final String snippet;
   const _SnippetText({required this.snippet});
 
+  // 高亮色按主题分别取值：单一固定色无法同时与浅色 / 深色正文拉开区分度
+  static const _highlightLight = Color(0xFF2F7D72);
+  static const _highlightDark = Color(0xFF6FB8AD);
+
   @override
   Widget build(BuildContext context) {
     final spans = <TextSpan>[];
     final regex = RegExp(r'<mark>(.*?)</mark>');
+    final highlightColor = Theme.of(context).brightness == Brightness.dark
+        ? _highlightDark
+        : _highlightLight;
     var lastEnd = 0;
     for (final m in regex.allMatches(snippet)) {
       if (m.start > lastEnd) {
@@ -153,7 +160,7 @@ class _SnippetText extends StatelessWidget {
       spans.add(TextSpan(
         text: m.group(1),
         style: TextStyle(
-          color: Theme.of(context).colorScheme.primary,
+          color: highlightColor,
           fontWeight: FontWeight.bold,
         ),
       ));

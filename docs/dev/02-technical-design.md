@@ -1,10 +1,10 @@
 # 技术设计文档
 
-> 版本：v0.2（2026-05-16）
+> 版本：v0.3（2026-05-16）
 > 对应产品需求：[01-product-requirements.md](../demand/01-product-requirements.md)
 > 构建与分发：[03-build-and-release.md](./03-build-and-release.md)
 
-本版本同步范围：最近一次 commit `5c45330 增加滑动阅读模式`，以及当前已 stage 的主题 / 动效 / 构建文档相关修改。
+v0.3 补充：数据库后端从系统 SQLite 切换到全平台自带 `sqlite3` v3（修复 Android 系统 SQLite 缺 FTS5 导致的启动失败），新增数据库初始化失败的兜底错误页。
 
 ## 1. 技术栈选型
 
@@ -13,8 +13,8 @@
 | UI 框架 | **Flutter 3.x（stable）** | 全平台像素级一致渲染、移动端原生体验、单语言生态、文本渲染成熟 |
 | 语言 | **Dart 3.x** | Flutter 官方语言，空安全成熟 |
 | 状态管理 | **Riverpod 2.x** | 社区主流、可测试、编译期安全、无需 BuildContext |
-| 本地存储 | **sqflite + sqflite_common_ffi** | 跨平台 SQLite，桌面端通过 ffi 支持 |
-| 全文索引 | **SQLite FTS5（unicode61 + Dart 侧 bigram 化）** | 内置无外部依赖；自切 bigram 让 ≥2 字关键词可搜 |
+| 本地存储 | **sqflite_common_ffi + sqlite3** | 全平台统一走 ffi；`sqlite3` v3 自带含 FTS5 的 SQLite，不依赖系统库 |
+| 全文索引 | **SQLite FTS5（unicode61 + Dart 侧 bigram 化）** | FTS5 由自带 SQLite 提供；自切 bigram 让 ≥2 字关键词可搜 |
 | 编码检测 | **enough_convert + 自实现策略** | 覆盖 UTF-8 / UTF-16 / GBK / GB18030 等中文小说常见编码 |
 | 文件选择 | **file_picker** | 跨平台 + Android SAF 兼容 |
 | epub 解析 | **epubx + html + archive** | epubx 读 epub，html 抽纯文本，archive 处理“解压目录形式”的 epub |
@@ -62,8 +62,9 @@
 
 ```text
 lib/
-├── main.dart                      # 入口，初始化数据库、Riverpod 容器
+├── main.dart                      # 入口：初始化数据库（失败则显示错误页）、Riverpod 容器
 ├── app.dart                       # MaterialApp、全局主题与首页
+├── db_init_error_app.dart         # 数据库初始化失败的兜底错误页
 │
 ├── core/
 │   ├── db/
@@ -397,18 +398,18 @@ App 主题分两层：
 
 - 当前 `android/app/build.gradle.kts` 使用 Flutter 默认 SDK 值：`compileSdk = 36`、`targetSdk = 36`、`minSdk = flutter.minSdkVersion`（Flutter 3.38.7 当前为 24）。若产品上明确只支持 Android 8+，需显式写 `minSdk = 26`。
 - Storage Access Framework：`file_picker` 默认走 SAF，无需额外申请存储权限。
-- SQLite FTS5 unicode61：系统 SQLite 覆盖度足够；不依赖额外 native 编译选项。
+- SQLite / FTS5：Android 系统自带的 SQLite **未编入 FTS5 模块**（只有 FTS3/4），直接建 FTS5 虚表会抛 `no such module: fts5`，曾导致数据库初始化失败、应用启动黑屏。解决：全平台统一经 `sqflite_common_ffi` 走 ffi，由 `sqlite3` v3 提供自带含 FTS5 的 SQLite（经 build hooks 打包进应用），不依赖系统库。
 - 构建工具链、JDK 版本、签名与分发详见 [03-build-and-release.md](./03-build-and-release.md)。
 
 ### 6.2 macOS
 
-- 桌面端 SQLite 通过 `sqflite_common_ffi` 初始化。
+- SQLite 初始化与 6.1 一致：全平台统一 ffi + 自带 `sqlite3`，macOS 无特殊处理。
 - 沙盒：默认 enabled，需要在 `macos/Runner/*.entitlements` 中开启 `com.apple.security.files.user-selected.read-only` 才能选文件。
 - 因为导入后会拷贝到 app 沙盒，不需要长期持有 security-scoped bookmark。
 
 ### 6.3 Windows
 
-- sqflite 在 Windows 上必须用 `sqflite_common_ffi` 初始化。
+- SQLite 初始化与 6.1 一致：全平台统一 ffi + 自带 `sqlite3`。
 - 构建依赖：Visual Studio 2022 + “Desktop development with C++” 工作负载。
 
 ### 6.4 Linux
@@ -437,7 +438,7 @@ App 主题分两层：
 |---|---|---|
 | Android 第一次构建踩 Gradle / NDK / JDK 版本 | 阻塞 | 已拆出 [03-build-and-release.md](./03-build-and-release.md)，按真实配置记录版本，不凭注释或最大值推断 |
 | JDK 过新导致 Gradle / AGP 不兼容 | 阻塞构建 | 当前构建固定使用 JDK 17；不要为迁就 JDK 25 主动升级 Gradle / AGP |
-| FTS5 索引体积较大 | 占用大 | MVP 接受；远期可评估 contentless 模式（需确认最低 SQLite 版本） |
+| FTS5 索引体积较大 | 占用大 | MVP 接受；现自带 `sqlite3` 版本可控，远期可评估 contentless 模式 |
 | 1 字符关键词搜不到 | 短词搜索失效 | 文档明确“≥2 字符”；如需 1 字搜索，再加 LIKE 兜底分支 |
 | TextPainter 在不同平台字体度量微差 | 分页结果略不同 | 接受差异（同一设备稳定即可），不强求跨平台一致 |
 | 滚动模式用比例映射字符偏移 | 恢复位置不如分页精确 | 作为连续滚动的近似进度；书签 / 搜索跳转仍以章节内字符偏移为源数据 |

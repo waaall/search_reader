@@ -1,6 +1,6 @@
 # 构建与分发文档
 
-> 版本：v0.1（2026-05-16）
+> 版本：v0.2（2026-05-16）
 > 对应技术设计：[02-technical-design.md](./02-technical-design.md)
 
 本文档说明如何在 macOS 上从零搭建构建环境、构建各平台安装包、以及分发。
@@ -170,6 +170,8 @@ flutter doctor -v
 
 > **首次构建较慢**：会下载 Gradle 8.14、AGP / Kotlin 依赖、NDK、CMake，约几百 MB。之后走缓存。
 
+`flutter build apk --target-platform android-arm64` 也可针对主流机器。
+
 ### 4.2 macOS
 
 ```bash
@@ -297,6 +299,7 @@ android {
 | `brew install --cask temurin@17` 报 sudo / 需要密码 | cask 用 .pkg 安装器，需管理员密码 | 在交互终端里手动执行，或改用 `brew install openjdk@17` |
 | 首次构建长时间卡住 | 在拉 Gradle / 依赖 / NDK | 正常，耐心等；网络差时配代理（`gradle.properties` 加 `systemProp.http.proxyHost` 等）|
 | `adb: command not found` | platform-tools 未加入 PATH | 见 3.2 步骤 6 |
+| App 启动显示“应用启动失败”错误页（旧版本表现为黑屏） | 数据库初始化 `AppDatabase.init()` 抛异常 | 看错误页上的错误信息；或按第 9 节抓 logcat、grep `fts5` / `DatabaseException` 定位 |
 
 ## 8. 日常构建速查
 
@@ -305,6 +308,47 @@ android {
 ```bash
 flutter pub get                 # 依赖有变动时
 flutter analyze                 # 提交前必须无 error（见 02 文档第 10 节）
-flutter build apk               # Android 安装包
+flutter build apk               # Android 安装包 可加--target-platform android-arm64
 flutter build macos             # macOS 桌面包
+```
+
+## 9. 真机调试常用命令
+
+Android 真机排障（尤其“装上点不开 / 黑屏”类问题）常用命令。前置：手机开 USB 调试并授权；`adb` 未加入 PATH 时用全路径 `$ANDROID_HOME/platform-tools/adb`（见 3.2 步骤 6）。
+
+包名 `com.searchreader.search_reader`、主 Activity `.MainActivity`（见 `android/app/build.gradle.kts` 的 `applicationId`）。
+
+**设备与安装**
+
+```bash
+adb devices -l          # 列设备；unauthorized → 在手机上点“允许 USB 调试”
+adb install -r build/app/outputs/flutter-apk/app-release.apk   # 覆盖安装
+adb uninstall com.searchreader.search_reader                   # 卸载
+```
+
+报 `INSTALL_FAILED_VERSION_DOWNGRADE`（新包 versionCode 比机上旧包小）：加 `-d` 允许降级，或先 `adb uninstall` 再装。
+
+**冷启动并抓启动日志**
+
+```bash
+adb logcat -c                                                  # 清空日志缓冲
+adb shell am force-stop com.searchreader.search_reader
+adb shell am start -W -n com.searchreader.search_reader/.MainActivity
+sleep 5 && adb logcat -d > /tmp/sr_log.txt                     # 导出日志
+```
+
+`am start -W` 输出里 `Status: ok` = 首帧已渲染；`Status: timeout` / `LaunchState: UNKNOWN` = 没出首帧，通常是 `runApp()` 之前抛了异常。
+
+**过滤关键错误**
+
+```bash
+grep -inE "fts5|sqlite|DatabaseException|Unhandled Exception|FATAL" /tmp/sr_log.txt
+```
+
+命中 `no such module: fts5` 说明用到了缺 FTS5 的 SQLite（背景见 02 文档 6.1）；`Unhandled Exception` 出现在 `main()` 调用栈里说明初始化阶段就失败了。
+
+**截屏**
+
+```bash
+adb exec-out screencap -p > /tmp/screen.png
 ```

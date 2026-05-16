@@ -7,7 +7,8 @@
       "Bash(flutter doctor *)",
       "Bash(flutter pub *)",
       "Bash(flutter build *)",
-      "Bash(adb devices *)"
+      "Bash(adb devices *)",
+      "Bash(unzip -l build/app/outputs/flutter-apk/app-release.apk)"
     ]
   }
 }
