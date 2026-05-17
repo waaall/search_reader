@@ -21,6 +21,7 @@ v0.3 补充：数据库后端从系统 SQLite 切换到全平台自带 `sqlite3`
 | 路径管理 | **path_provider + path** | 跨平台沙盒目录抽象与路径拼接 |
 | 主题系统 | **flex_color_scheme + app_tokens** | 统一 Material 组件圆角 / 交互效果 / 间距 / 动效时长，减少硬编码 |
 | 微动效 | **flutter_animate** | 列表、空状态、提示条等轻量入场动效，提升操作反馈 |
+| 国际化 | **Flutter gen-l10n + ARB** | App UI 文案集中维护，语言切换可立即驱动全局重建，便于后续扩展更多语言 |
 
 **已排除的选项与原因**：
 
@@ -63,8 +64,12 @@ v0.3 补充：数据库后端从系统 SQLite 切换到全平台自带 `sqlite3`
 ```text
 lib/
 ├── main.dart                      # 入口：初始化数据库（失败则显示错误页）、Riverpod 容器
-├── app.dart                       # MaterialApp、全局主题与首页
+├── app.dart                       # MaterialApp、全局主题、国际化与首页
 ├── db_init_error_app.dart         # 数据库初始化失败的兜底错误页
+├── l10n/                          # ARB 文案与 gen-l10n 生成代码
+│   ├── app_en.arb
+│   ├── app_zh.arb
+│   └── app_localizations*.dart
 │
 ├── core/
 │   ├── db/
@@ -105,10 +110,12 @@ lib/
 │   │   ├── all_bookmarks_page.dart
 │   │   └── all_bookmarks_provider.dart
 │   └── settings/
+│       ├── app_locale_provider.dart # App 显示语言设置
 │       ├── settings_page.dart
 │       └── settings_provider.dart
 │
 └── shared/
+    ├── l10n/                      # context.l10n 扩展与本地化格式化工具
     ├── widgets/                   # 通用组件
     └── theme/
         ├── app_theme.dart         # 非阅读页面 Material 主题
@@ -256,6 +263,7 @@ class ReaderSettings {
 | `reader.line_height` | 阅读行距档位 | `normal` |
 | `reader.theme` | 阅读器正文主题 | `light` |
 | `reader.reading_mode` | 阅读模式 | `paginated` |
+| `app.locale` | App 显示语言：`system` / `simplifiedChinese` / `english` | `system` |
 
 ## 5. 关键模块设计
 
@@ -391,6 +399,18 @@ App 主题分两层：
 - 书架空状态、导入提示、错误提示入场动效。
 - 全部书签页分组标题、书签项、空状态淡入。
 - 搜索结果项淡入。
+
+### 5.9 App UI 国际化（l10n）
+
+第一版只支持 **简体中文** 与 **English**，默认语言策略为“跟随系统”。语言设置作为 App 级偏好持久化到 `app.locale`，由 `appLocaleProvider` 驱动 `MaterialApp.locale`；用户在设置页切换后，无需重启即可全局刷新。
+
+实现约定：
+
+- 使用 Flutter 官方 `gen-l10n`：源文案集中在 `lib/l10n/app_zh.arb` 与 `lib/l10n/app_en.arb`，生成代码为 `AppLocalizations`。
+- UI 通过 `context.l10n` 读取文案；日期相对时间、字数、导入阶段、结构化错误等动态文本统一放在 `shared/l10n/app_formatters.dart` 中按当前语言生成。
+- 领域层与 enum 不保存显示文本，只保存稳定逻辑值（例如 `ReadingMode.paginated`、`ReaderThemeMode.light`）。
+- 只翻译 App UI；书名、章节标题、正文、搜索片段、书签备注等用户数据保持原文。
+- 用户友好的错误标题 / 前缀走 l10n，底层异常详情原样显示，便于排查。
 
 ## 6. 跨平台关键事项
 

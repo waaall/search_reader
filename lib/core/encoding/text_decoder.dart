@@ -51,7 +51,7 @@ class TextDecoder {
         final text = const GbkCodec(allowInvalid: true).decode(bytes);
         return DecodedText(text, DetectedEncoding.gbk);
       } catch (e) {
-        throw DecodingException('无法识别文件编码：$e');
+        throw DecodingException('Unable to detect file encoding: $e');
       }
     }
   }
@@ -79,7 +79,7 @@ class TextDecoder {
   // UTF-16 解码：dart:convert 没有官方 codec，手工组装码点
   static String _decodeUtf16(Uint8List bytes, {required bool littleEndian}) {
     if (bytes.length.isOdd) {
-      throw DecodingException('UTF-16 字节数不是偶数');
+      throw DecodingException('UTF-16 byte length is not even');
     }
     final codeUnits = <int>[];
     for (var i = 0; i < bytes.length; i += 2) {

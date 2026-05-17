@@ -61,11 +61,11 @@ class ReaderNotifier extends AutoDisposeFamilyAsyncNotifier<ReaderState, int> {
   Future<ReaderState> build(int bookId) async {
     final book = await _bookDao.findById(bookId);
     if (book == null) {
-      throw StateError('找不到书籍 id=$bookId');
+      throw StateError('Book not found: id=$bookId');
     }
     final chapters = await _chapterDao.listByBook(bookId);
     if (chapters.isEmpty) {
-      throw StateError('书籍 id=$bookId 没有章节数据');
+      throw StateError('Book has no chapter data: id=$bookId');
     }
     final progress = await _progressDao.get(bookId);
     final initialIndex = (progress?.chapterIndex ?? 0)

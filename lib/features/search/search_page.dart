@@ -5,6 +5,7 @@ import 'package:flutter_animate/flutter_animate.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/db/daos.dart';
+import '../../shared/l10n/app_l10n.dart';
 import '../../shared/theme/app_tokens.dart';
 import '../reader/reader_page.dart';
 import 'search_service.dart';
@@ -34,7 +35,10 @@ class _SearchPageState extends ConsumerState<SearchPage> {
   // 输入防抖，避免每个字符都查一次数据库
   void _onChanged(String text) {
     _debounce?.cancel();
-    _debounce = Timer(const Duration(milliseconds: 250), () => _runSearch(text));
+    _debounce = Timer(
+      const Duration(milliseconds: 250),
+      () => _runSearch(text),
+    );
   }
 
   Future<void> _runSearch(String text) async {
@@ -73,8 +77,8 @@ class _SearchPageState extends ConsumerState<SearchPage> {
         title: TextField(
           controller: _controller,
           autofocus: true,
-          decoration: const InputDecoration(
-            hintText: '搜索全部书籍内容',
+          decoration: InputDecoration(
+            hintText: context.l10n.searchHint,
             border: InputBorder.none,
           ),
           onChanged: _onChanged,
@@ -89,18 +93,18 @@ class _SearchPageState extends ConsumerState<SearchPage> {
       return const Center(child: CircularProgressIndicator());
     }
     if (_error != null) {
-      return Center(child: Text('搜索失败：$_error'));
+      return Center(child: Text(context.l10n.searchFailed(_error!)));
     }
     if (_controller.text.isEmpty) {
-      return const Center(
+      return Center(
         child: Text(
-          '输入关键词，跨书检索章节内容',
+          context.l10n.searchEmptyHint,
           style: TextStyle(color: Colors.grey),
         ),
       );
     }
     if (_hits.isEmpty) {
-      return const Center(child: Text('没有匹配结果'));
+      return Center(child: Text(context.l10n.noSearchResults));
     }
     return ListView.separated(
       itemCount: _hits.length,
@@ -157,13 +161,12 @@ class _SnippetText extends StatelessWidget {
       if (m.start > lastEnd) {
         spans.add(TextSpan(text: snippet.substring(lastEnd, m.start)));
       }
-      spans.add(TextSpan(
-        text: m.group(1),
-        style: TextStyle(
-          color: highlightColor,
-          fontWeight: FontWeight.bold,
+      spans.add(
+        TextSpan(
+          text: m.group(1),
+          style: TextStyle(color: highlightColor, fontWeight: FontWeight.bold),
         ),
-      ));
+      );
       lastEnd = m.end;
     }
     if (lastEnd < snippet.length) {

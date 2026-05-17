@@ -26,37 +26,29 @@ enum ReaderThemeMode {
   light(
     background: Color(0xFFFFFFFF),
     foreground: Color(0xFF222222),
-    label: '日间',
   ),
   dark(
     background: Color(0xFF1A1A1A),
     foreground: Color(0xFFCCCCCC),
-    label: '夜间',
   ),
   sepia(
     background: Color(0xFFF5ECD8),
     foreground: Color(0xFF5B4636),
-    label: '护眼',
   );
 
   final Color background;
   final Color foreground;
-  final String label;
 
   const ReaderThemeMode({
     required this.background,
     required this.foreground,
-    required this.label,
   });
 }
 
 // 阅读模式：翻页 / 滚动
 enum ReadingMode {
-  paginated('翻页'),
-  scroll('滚动');
-
-  final String label;
-  const ReadingMode(this.label);
+  paginated,
+  scroll;
 }
 
 @immutable

@@ -199,7 +199,8 @@ class BookmarkDao {
                 'created_at': r['created_at'],
               }),
               bookTitle: r['book_title'] as String,
-              chapterTitle: (r['chapter_title'] as String?) ?? '未知章节',
+              // 章节缺失时返回空串，具体兜底文案交给 UI 按当前语言生成。
+              chapterTitle: (r['chapter_title'] as String?) ?? '',
             ))
         .toList();
   }

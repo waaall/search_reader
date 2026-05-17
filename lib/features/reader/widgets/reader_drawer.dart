@@ -3,6 +3,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../domain/bookmark.dart';
 import '../../../domain/chapter.dart';
+import '../../../shared/l10n/app_formatters.dart';
+import '../../../shared/l10n/app_l10n.dart';
 import '../bookmark_provider.dart';
 
 // 阅读器侧边抽屉：目录 + 书签 双 tab
@@ -31,10 +33,10 @@ class ReaderDrawer extends ConsumerWidget {
         child: SafeArea(
           child: Column(
             children: [
-              const TabBar(
+              TabBar(
                 tabs: [
-                  Tab(text: '目录'),
-                  Tab(text: '书签'),
+                  Tab(text: context.l10n.contentsTitle),
+                  Tab(text: context.l10n.bookmarksTitle),
                 ],
               ),
               Expanded(
@@ -86,8 +88,7 @@ class _ChaptersTab extends StatelessWidget {
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
             style: TextStyle(
-              color:
-                  isCurrent ? Theme.of(context).colorScheme.primary : null,
+              color: isCurrent ? Theme.of(context).colorScheme.primary : null,
               fontWeight: isCurrent ? FontWeight.bold : null,
             ),
           ),
@@ -117,16 +118,16 @@ class _BookmarksTab extends ConsumerWidget {
     final asyncBookmarks = ref.watch(bookmarksProvider(bookId));
     return asyncBookmarks.when(
       loading: () => const Center(child: CircularProgressIndicator()),
-      error: (e, _) => Center(child: Text('加载书签失败：$e')),
+      error: (e, _) => Center(child: Text(context.l10n.loadBookmarksFailed(e))),
       data: (bookmarks) {
         if (bookmarks.isEmpty) {
-          return const Center(
+          return Center(
             child: Padding(
-              padding: EdgeInsets.all(24),
+              padding: const EdgeInsets.all(24),
               child: Text(
-                '还没有书签\n阅读时点底部「书签」按钮可添加',
+                context.l10n.emptyBookmarksHint,
                 textAlign: TextAlign.center,
-                style: TextStyle(color: Colors.grey),
+                style: const TextStyle(color: Colors.grey),
               ),
             ),
           );
@@ -136,22 +137,23 @@ class _BookmarksTab extends ConsumerWidget {
           separatorBuilder: (_, _) => const Divider(height: 1),
           itemBuilder: (_, i) => _BookmarkTile(
             bookmark: bookmarks[i],
-            chapterTitle: _chapterTitleOf(bookmarks[i].chapterIndex),
+            chapterTitle: _chapterTitleOf(context, bookmarks[i].chapterIndex),
             onTap: () {
               Navigator.of(context).pop();
               onJump(bookmarks[i].chapterIndex, bookmarks[i].charOffset);
             },
-            onDelete: () =>
-                ref.read(bookmarksProvider(bookId).notifier).remove(bookmarks[i].id),
+            onDelete: () => ref
+                .read(bookmarksProvider(bookId).notifier)
+                .remove(bookmarks[i].id),
           ),
         );
       },
     );
   }
 
-  // 通过 chapterIndex 查标题；越界（理论上不会）时给个兜底
-  String _chapterTitleOf(int idx) {
-    if (idx < 0 || idx >= chapters.length) return '未知章节';
+  // 通过 chapterIndex 查标题；越界（理论上不会）时给本地化兜底
+  String _chapterTitleOf(BuildContext context, int idx) {
+    if (idx < 0 || idx >= chapters.length) return context.l10n.unknownChapter;
     return chapters[idx].title;
   }
 }
@@ -174,33 +176,31 @@ class _BookmarkTile extends StatelessWidget {
     final note = bookmark.note?.trim();
     return ListTile(
       dense: true,
-      title: Text(
-        chapterTitle,
-        maxLines: 1,
-        overflow: TextOverflow.ellipsis,
-      ),
+      title: Text(chapterTitle, maxLines: 1, overflow: TextOverflow.ellipsis),
       subtitle: note != null && note.isNotEmpty
           ? Text(note, maxLines: 2, overflow: TextOverflow.ellipsis)
           : Text(
-              _formatTime(bookmark.createdAt),
+              AppFormatters.relativeTime(context, bookmark.createdAt),
               style: const TextStyle(color: Colors.grey),
             ),
       trailing: IconButton(
-        tooltip: '删除',
+        tooltip: context.l10n.commonDelete,
         icon: const Icon(Icons.delete_outline, size: 20),
         onPressed: () async {
           final confirmed = await showDialog<bool>(
             context: context,
             builder: (_) => AlertDialog(
-              title: const Text('删除书签'),
-              content: const Text('确定删除这条书签？'),
+              title: Text(context.l10n.deleteBookmark),
+              content: Text(context.l10n.confirmDeleteBookmark),
               actions: [
                 TextButton(
-                    onPressed: () => Navigator.pop(context, false),
-                    child: const Text('取消')),
+                  onPressed: () => Navigator.pop(context, false),
+                  child: Text(context.l10n.commonCancel),
+                ),
                 TextButton(
-                    onPressed: () => Navigator.pop(context, true),
-                    child: const Text('删除')),
+                  onPressed: () => Navigator.pop(context, true),
+                  child: Text(context.l10n.commonDelete),
+                ),
               ],
             ),
           );
@@ -209,15 +209,5 @@ class _BookmarkTile extends StatelessWidget {
       ),
       onTap: onTap,
     );
-  }
-
-  String _formatTime(DateTime t) {
-    final now = DateTime.now();
-    final diff = now.difference(t);
-    if (diff.inMinutes < 1) return '刚刚';
-    if (diff.inHours < 1) return '${diff.inMinutes} 分钟前';
-    if (diff.inDays < 1) return '${diff.inHours} 小时前';
-    if (diff.inDays < 30) return '${diff.inDays} 天前';
-    return '${t.year}-${t.month.toString().padLeft(2, '0')}-${t.day.toString().padLeft(2, '0')}';
   }
 }

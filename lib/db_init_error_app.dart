@@ -3,6 +3,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'app.dart';
 import 'core/db/database.dart';
+import 'l10n/app_localizations.dart';
+import 'shared/l10n/app_l10n.dart';
 import 'shared/theme/app_theme.dart';
 
 // 数据库初始化失败时的兜底 App：避免卡在 runApp 之前导致黑屏。
@@ -15,7 +17,9 @@ class DbInitErrorApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: '小说阅读器',
+      onGenerateTitle: (context) => context.l10n.appTitle,
+      supportedLocales: AppLocalizations.supportedLocales,
+      localizationsDelegates: AppLocalizations.localizationsDelegates,
       theme: AppTheme.light(),
       darkTheme: AppTheme.dark(),
       themeMode: ThemeMode.system,
@@ -56,6 +60,7 @@ class _DbInitErrorPageState extends State<_DbInitErrorPage> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final l10n = context.l10n;
     return Scaffold(
       body: SafeArea(
         child: Center(
@@ -74,13 +79,13 @@ class _DbInitErrorPageState extends State<_DbInitErrorPage> {
                   ),
                   const SizedBox(height: 16),
                   Text(
-                    '应用启动失败',
+                    l10n.appStartupFailed,
                     textAlign: TextAlign.center,
                     style: theme.textTheme.headlineSmall,
                   ),
                   const SizedBox(height: 8),
                   Text(
-                    '数据库初始化失败，暂时无法进入应用。',
+                    l10n.databaseInitializationFailed,
                     textAlign: TextAlign.center,
                     style: theme.textTheme.bodyMedium,
                   ),
@@ -94,8 +99,9 @@ class _DbInitErrorPageState extends State<_DbInitErrorPage> {
                     ),
                     child: SelectableText(
                       _error.toString(),
-                      style: theme.textTheme.bodySmall
-                          ?.copyWith(fontFamily: 'monospace'),
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        fontFamily: 'monospace',
+                      ),
                     ),
                   ),
                   const SizedBox(height: 24),
@@ -108,7 +114,9 @@ class _DbInitErrorPageState extends State<_DbInitErrorPage> {
                             child: CircularProgressIndicator(strokeWidth: 2),
                           )
                         : const Icon(Icons.refresh),
-                    label: Text(_retrying ? '重试中…' : '重试'),
+                    label: Text(
+                      _retrying ? l10n.commonRetrying : l10n.commonRetry,
+                    ),
                   ),
                 ],
               ),

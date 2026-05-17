@@ -1,0 +1,194 @@
+{
+  "@@locale": "en",
+  "appTitle": "Search Reader",
+  "commonCancel": "Cancel",
+  "commonDelete": "Delete",
+  "commonSave": "Save",
+  "commonRetry": "Retry",
+  "commonRetrying": "Retrying…",
+  "commonSettings": "Settings",
+  "commonSearch": "Search",
+  "commonDetails": "Details",
+  "loadFailed": "Failed to load: {error}",
+  "@loadFailed": {
+    "placeholders": {
+      "error": {"type": "Object"}
+    }
+  },
+  "appStartupFailed": "App failed to start",
+  "databaseInitializationFailed": "Database initialization failed, so the app cannot be opened right now.",
+  "settingsTitle": "Settings",
+  "systemSettingsSection": "System settings",
+  "displayLanguage": "Display language",
+  "languageSystem": "Follow system",
+  "languageSimplifiedChinese": "Simplified Chinese",
+  "languageEnglish": "English",
+  "readingSettingsSection": "Reading settings",
+  "fontSizeSection": "Font size",
+  "fontSizeSmall": "Small",
+  "fontSizeMedium": "Medium",
+  "fontSizeLarge": "Large",
+  "fontSizeExtraLarge": "Extra large",
+  "lineHeightSection": "Line spacing",
+  "lineHeightCompact": "Compact",
+  "lineHeightNormal": "Standard",
+  "lineHeightRelaxed": "Relaxed",
+  "readerThemeSection": "Theme",
+  "readerThemeLight": "Light",
+  "readerThemeDark": "Dark",
+  "readerThemeSepia": "Sepia",
+  "readingModeSection": "Reading mode",
+  "readingModePaginated": "Page",
+  "readingModeScroll": "Scroll",
+  "settingsPreviewText": "Moonlight lay like a thin frost over the eaves. She closed the book and listened to the wind moving through the bamboo, a sound that carried her back to Jiangnan years ago.",
+  "libraryTitle": "Library",
+  "loadLibraryFailed": "Failed to load library: {error}",
+  "@loadLibraryFailed": {
+    "placeholders": {
+      "error": {"type": "Object"}
+    }
+  },
+  "importBooks": "Import books",
+  "exitSelection": "Exit selection",
+  "selectedBooks": "{count, plural, =0{No books selected} =1{1 book selected} other{{count} books selected}}",
+  "@selectedBooks": {
+    "placeholders": {
+      "count": {"type": "int"}
+    }
+  },
+  "selectAll": "Select all",
+  "batchDelete": "Batch delete",
+  "confirmBatchDelete": "{count, plural, =1{Delete the selected book and its reading progress?} other{Delete the selected {count} books and their reading progress?}}",
+  "@confirmBatchDelete": {
+    "placeholders": {
+      "count": {"type": "int"}
+    }
+  },
+  "emptyLibraryHint": "Your library is empty. Tap the button below to import txt or epub files.",
+  "unread": "Unread",
+  "lastReadAt": "Last read {time}",
+  "@lastReadAt": {
+    "placeholders": {
+      "time": {"type": "String"}
+    }
+  },
+  "deleteBook": "Delete book",
+  "confirmDeleteBook": "Delete \"{title}\" and its reading progress?",
+  "@confirmDeleteBook": {
+    "placeholders": {
+      "title": {"type": "String"}
+    }
+  },
+  "fileTooLarge": "{fileName} exceeds the size limit.",
+  "@fileTooLarge": {
+    "placeholders": {
+      "fileName": {"type": "String"}
+    }
+  },
+  "unsupportedFileFormats": "Unsupported file format. Only txt and epub are supported:\n{files}",
+  "@unsupportedFileFormats": {
+    "placeholders": {
+      "files": {"type": "String"}
+    }
+  },
+  "partialDeleteFailed": "Some books could not be deleted:\n{details}",
+  "@partialDeleteFailed": {
+    "placeholders": {
+      "details": {"type": "String"}
+    }
+  },
+  "importFailed": "Import failed: {details}",
+  "@importFailed": {
+    "placeholders": {
+      "details": {"type": "String"}
+    }
+  },
+  "importUnsupportedFormat": "Unsupported file format: {extension}",
+  "@importUnsupportedFormat": {
+    "placeholders": {
+      "extension": {"type": "String"}
+    }
+  },
+  "importCannotDecode": "Unable to detect the text encoding.",
+  "importUnexpectedFailure": "Import failed unexpectedly.",
+  "importDetailPrefix": "Details: {details}",
+  "@importDetailPrefix": {
+    "placeholders": {
+      "details": {"type": "String"}
+    }
+  },
+  "importPhaseCopying": "Copying file",
+  "importPhaseParsing": "Parsing chapters",
+  "importPhaseIndexing": "Building index",
+  "importPhaseDone": "Import complete",
+  "searchHint": "Search all book content",
+  "searchFailed": "Search failed: {error}",
+  "@searchFailed": {
+    "placeholders": {
+      "error": {"type": "Object"}
+    }
+  },
+  "searchEmptyHint": "Enter keywords to search chapters across your library.",
+  "noSearchResults": "No matching results",
+  "bookmarksTitle": "Bookmarks",
+  "loadBookmarksFailed": "Failed to load bookmarks: {error}",
+  "@loadBookmarksFailed": {
+    "placeholders": {
+      "error": {"type": "Object"}
+    }
+  },
+  "deleteBookmark": "Delete bookmark",
+  "confirmDeleteBookmark": "Delete this bookmark?",
+  "emptyBookmarksHint": "No bookmarks yet\nTap the bottom Bookmark button while reading to add one.",
+  "bookmarkAdded": "Bookmark added",
+  "addBookmark": "Add bookmark",
+  "bookmarkNoteHint": "Note (optional)",
+  "contentsTitle": "Contents",
+  "contentsAndBookmarks": "Contents & bookmarks",
+  "unknownChapter": "Unknown chapter",
+  "openBookFailed": "Failed to open: {error}",
+  "@openBookFailed": {
+    "placeholders": {
+      "error": {"type": "Object"}
+    }
+  },
+  "settingsLoadFailed": "Failed to load settings: {error}",
+  "@settingsLoadFailed": {
+    "placeholders": {
+      "error": {"type": "Object"}
+    }
+  },
+  "previousChapter": "Previous",
+  "nextChapter": "Next",
+  "justNow": "Just now",
+  "minutesAgo": "{minutes, plural, =1{1 minute ago} other{{minutes} minutes ago}}",
+  "@minutesAgo": {
+    "placeholders": {
+      "minutes": {"type": "int"}
+    }
+  },
+  "hoursAgo": "{hours, plural, =1{1 hour ago} other{{hours} hours ago}}",
+  "@hoursAgo": {
+    "placeholders": {
+      "hours": {"type": "int"}
+    }
+  },
+  "daysAgo": "{days, plural, =1{1 day ago} other{{days} days ago}}",
+  "@daysAgo": {
+    "placeholders": {
+      "days": {"type": "int"}
+    }
+  },
+  "characterCount": "{count, plural, =1{1 character} other{{count} characters}}",
+  "@characterCount": {
+    "placeholders": {
+      "count": {"type": "int"}
+    }
+  },
+  "characterCountTenThousand": "{value}0K characters",
+  "@characterCountTenThousand": {
+    "placeholders": {
+      "value": {"type": "String"}
+    }
+  }
+}

@@ -20,7 +20,8 @@ class AppDatabase {
   static AppDatabase get instance {
     final inst = _instance;
     if (inst == null) {
-      throw StateError('AppDatabase 尚未初始化，请先调用 AppDatabase.init()');
+      throw StateError(
+          'AppDatabase is not initialized. Call AppDatabase.init() first.');
     }
     return inst;
   }

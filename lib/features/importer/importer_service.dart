@@ -17,10 +17,10 @@ class ImporterService {
     EpubParser? epubParser,
     BookDao? bookDao,
     ChapterDao? chapterDao,
-  })  : _txtParser = txtParser ?? TxtParser(),
-        _epubParser = epubParser ?? EpubParser(),
-        _bookDao = bookDao ?? BookDao(),
-        _chapterDao = chapterDao ?? ChapterDao();
+  }) : _txtParser = txtParser ?? TxtParser(),
+       _epubParser = epubParser ?? EpubParser(),
+       _bookDao = bookDao ?? BookDao(),
+       _chapterDao = chapterDao ?? ChapterDao();
 
   final TxtParser _txtParser;
   final EpubParser _epubParser;
@@ -36,7 +36,7 @@ class ImporterService {
       case '.epub':
         return _epubParser;
       default:
-        throw ImportException('不支持的文件格式：$ext');
+        throw ImportException.unsupportedFormat(ext);
     }
   }
 
@@ -63,7 +63,9 @@ class ImporterService {
         sandboxRelativePath = await BookStorage.writeTextFile(parsed.fullText);
       } else {
         onProgress?.call(ImportPhase.copying);
-        sandboxRelativePath = await BookStorage.importFromExternal(externalPath);
+        sandboxRelativePath = await BookStorage.importFromExternal(
+          externalPath,
+        );
         final absPath = await BookStorage.resolveAbsolute(sandboxRelativePath);
         parsed = await parser.parse(absPath);
       }
@@ -90,14 +92,14 @@ class ImporterService {
       if (sandboxRelativePath != null) {
         await BookStorage.deleteFile(sandboxRelativePath);
       }
-      throw ImportException(e.message);
+      throw ImportException.decodingFailed(e);
     } on ImportException {
       rethrow;
     } catch (e) {
       if (sandboxRelativePath != null) {
         await BookStorage.deleteFile(sandboxRelativePath);
       }
-      throw ImportException('导入失败：$e');
+      throw ImportException.unexpected(e);
     }
   }
 

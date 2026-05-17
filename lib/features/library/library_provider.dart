@@ -6,12 +6,13 @@ import '../../core/storage/book_storage.dart';
 import '../../domain/book.dart';
 import '../importer/import_progress.dart';
 import '../importer/importer_service.dart';
+import 'library_error.dart';
 
 // 书架状态：所有书 + 当前导入进度 + 多选状态
 class LibraryState {
   final List<Book> books;
   final ImportPhase? importing; // null 表示当前没有导入中
-  final String? error;
+  final LibraryError? error;
   final bool selectionMode; // 是否处于多选模式
   final Set<int> selectedIds; // 已选中的书籍 id
 
@@ -27,7 +28,7 @@ class LibraryState {
     List<Book>? books,
     ImportPhase? importing,
     bool clearImporting = false,
-    String? error,
+    LibraryError? error,
     bool clearError = false,
     bool? selectionMode,
     Set<int>? selectedIds,
@@ -76,42 +77,57 @@ class LibraryNotifier extends AsyncNotifier<LibraryState> {
       if (!await isWithinSizeLimit(path)) {
         // txt 限 10MB，epub 限 50MB（含图片资源）
         state = AsyncData(
-          (state.value ?? const LibraryState())
-              .copyWith(error: '${f.name} 超过大小上限'),
+          (state.value ?? const LibraryState()).copyWith(
+            error: FileTooLargeError(f.name),
+          ),
         );
         continue;
       }
       await _importOne(path);
     }
     if (unsupported.isNotEmpty) {
-      state = AsyncData((state.value ?? const LibraryState()).copyWith(
-        error: '以下文件格式不支持（仅 txt / epub）：${unsupported.join('、')}',
-      ));
+      state = AsyncData(
+        (state.value ?? const LibraryState()).copyWith(
+          error: UnsupportedFilesError(unsupported),
+        ),
+      );
     }
     await refresh();
   }
 
   Future<void> _importOne(String externalPath) async {
-    state = AsyncData((state.value ?? const LibraryState())
-        .copyWith(importing: ImportPhase.copying, clearError: true));
+    state = AsyncData(
+      (state.value ?? const LibraryState()).copyWith(
+        importing: ImportPhase.copying,
+        clearError: true,
+      ),
+    );
     try {
       await _importer.importFile(
         externalPath,
         onProgress: (phase) {
           state = AsyncData(
-              (state.value ?? const LibraryState()).copyWith(importing: phase));
+            (state.value ?? const LibraryState()).copyWith(importing: phase),
+          );
         },
       );
     } on ImportException catch (e) {
       state = AsyncData(
-          (state.value ?? const LibraryState()).copyWith(error: e.message));
+        (state.value ?? const LibraryState()).copyWith(
+          error: ImportFailedError(e),
+        ),
+      );
     } catch (e) {
       // 兜底：捕获任何未被 ImporterService 包装的异常，避免 UI 无反馈
       state = AsyncData(
-          (state.value ?? const LibraryState()).copyWith(error: '导入失败：$e'));
+        (state.value ?? const LibraryState()).copyWith(
+          error: UnexpectedImportError(e),
+        ),
+      );
     } finally {
-      state = AsyncData((state.value ?? const LibraryState())
-          .copyWith(clearImporting: true));
+      state = AsyncData(
+        (state.value ?? const LibraryState()).copyWith(clearImporting: true),
+      );
     }
   }
 
@@ -132,10 +148,9 @@ class LibraryNotifier extends AsyncNotifier<LibraryState> {
   // 进入多选模式，并预选第一本（通常是长按触发的那本）
   void enterSelection(int firstId) {
     final cur = state.value ?? const LibraryState();
-    state = AsyncData(cur.copyWith(
-      selectionMode: true,
-      selectedIds: {firstId},
-    ));
+    state = AsyncData(
+      cur.copyWith(selectionMode: true, selectedIds: {firstId}),
+    );
   }
 
   // 切换某本书的选中状态；若全部取消则自动退出多选模式
@@ -149,10 +164,9 @@ class LibraryNotifier extends AsyncNotifier<LibraryState> {
       next.add(id);
     }
     if (next.isEmpty) {
-      state = AsyncData(cur.copyWith(
-        selectionMode: false,
-        selectedIds: const {},
-      ));
+      state = AsyncData(
+        cur.copyWith(selectionMode: false, selectedIds: const {}),
+      );
     } else {
       state = AsyncData(cur.copyWith(selectedIds: next));
     }
@@ -162,20 +176,21 @@ class LibraryNotifier extends AsyncNotifier<LibraryState> {
   void selectAll() {
     final cur = state.value ?? const LibraryState();
     if (cur.books.isEmpty) return;
-    state = AsyncData(cur.copyWith(
-      selectionMode: true,
-      selectedIds: cur.books.map((b) => b.id).toSet(),
-    ));
+    state = AsyncData(
+      cur.copyWith(
+        selectionMode: true,
+        selectedIds: cur.books.map((b) => b.id).toSet(),
+      ),
+    );
   }
 
   // 退出多选模式，清空选择
   void exitSelection() {
     final cur = state.value ?? const LibraryState();
     if (!cur.selectionMode) return;
-    state = AsyncData(cur.copyWith(
-      selectionMode: false,
-      selectedIds: const {},
-    ));
+    state = AsyncData(
+      cur.copyWith(selectionMode: false, selectedIds: const {}),
+    );
   }
 
   // 批量删除选中书籍：循环调用单本删除，结束后统一 refresh
@@ -183,23 +198,28 @@ class LibraryNotifier extends AsyncNotifier<LibraryState> {
   Future<void> deleteSelected() async {
     final cur = state.value ?? const LibraryState();
     if (cur.selectedIds.isEmpty) return;
-    final targets = cur.books.where((b) => cur.selectedIds.contains(b.id)).toList();
-    final failures = <String>[];
+    final targets = cur.books
+        .where((b) => cur.selectedIds.contains(b.id))
+        .toList();
+    final failures = <DeleteFailure>[];
     for (final b in targets) {
       try {
         await _bookDao.delete(b.id);
         await BookStorage.deleteFile(b.filePath);
       } catch (e) {
-        failures.add('${b.title}: $e');
+        failures.add(DeleteFailure(title: b.title, details: e));
       }
     }
     final books = await _bookDao.listAll();
-    state = AsyncData(LibraryState(
-      books: books,
-      error: failures.isEmpty ? null : '部分删除失败：\n${failures.join('\n')}',
-    ));
+    state = AsyncData(
+      LibraryState(
+        books: books,
+        error: failures.isEmpty ? null : PartialDeleteFailedError(failures),
+      ),
+    );
   }
 }
 
-final libraryProvider =
-    AsyncNotifierProvider<LibraryNotifier, LibraryState>(LibraryNotifier.new);
+final libraryProvider = AsyncNotifierProvider<LibraryNotifier, LibraryState>(
+  LibraryNotifier.new,
+);

@@ -32,7 +32,7 @@ class EpubParser implements BookFormatParser {
     } on EpubParseException {
       rethrow;
     } catch (e) {
-      throw EpubParseException('读取 epub 文件失败：$e');
+      throw EpubParseException('Failed to read epub file: $e');
     }
 
     // epubx + archive 内部可能抛 ArgumentError / FormatException / StateError
@@ -41,7 +41,8 @@ class EpubParser implements BookFormatParser {
     try {
       book = await EpubReader.readBook(bytes);
     } catch (e) {
-      throw EpubParseException('epub 解析失败（可能文件损坏或非标准格式）：$e');
+      throw EpubParseException(
+          'Failed to parse epub; the file may be damaged or non-standard: $e');
     }
 
     final rawChapters = book.Chapters ?? const <EpubChapter>[];
@@ -128,7 +129,8 @@ class EpubParser implements BookFormatParser {
     if (type == FileSystemEntityType.directory) {
       return await _packDirectoryAsZip(path);
     }
-    throw EpubParseException('路径不存在或类型未知：$path');
+    throw EpubParseException(
+        'Path does not exist or has an unknown type: $path');
   }
 
   // 把已解压的 epub 目录打包成 epub 规范的 zip 字节流
@@ -160,7 +162,8 @@ class EpubParser implements BookFormatParser {
 
     final zipBytes = ZipEncoder().encode(archive);
     if (zipBytes == null || zipBytes.isEmpty) {
-      throw EpubParseException('无法把 epub 目录打包成 zip 流');
+      throw EpubParseException(
+          'Failed to pack epub directory into a zip stream');
     }
     return zipBytes;
   }

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../domain/reader_settings.dart';
+import '../../shared/l10n/app_l10n.dart';
 import '../settings/settings_page.dart';
 import '../settings/settings_provider.dart';
 import 'bookmark_provider.dart';
@@ -32,12 +33,14 @@ class ReaderPage extends ConsumerWidget {
           const Scaffold(body: Center(child: CircularProgressIndicator())),
       error: (e, _) => Scaffold(
         appBar: AppBar(),
-        body: Center(child: Text('打开失败：$e')),
+        body: Center(child: Text(context.l10n.openBookFailed(e))),
       ),
       data: (state) => asyncSettings.when(
         loading: () =>
             const Scaffold(body: Center(child: CircularProgressIndicator())),
-        error: (e, _) => Scaffold(body: Center(child: Text('设置加载失败：$e'))),
+        error: (e, _) => Scaffold(
+          body: Center(child: Text(context.l10n.settingsLoadFailed(e))),
+        ),
         data: (settings) => _ReaderShell(
           bookId: bookId,
           settings: settings,
@@ -88,10 +91,9 @@ class _ReaderShellState extends ConsumerState<_ReaderShell> {
     if (ic != null && !_didJumpToInitialChapter) {
       _didJumpToInitialChapter = true;
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        ref.read(readerProvider(widget.bookId).notifier).jumpToChapter(
-              ic,
-              charOffset: widget.initialCharOffset ?? 0,
-            );
+        ref
+            .read(readerProvider(widget.bookId).notifier)
+            .jumpToChapter(ic, charOffset: widget.initialCharOffset ?? 0);
       });
     }
   }
@@ -143,18 +145,19 @@ class _ReaderShellState extends ConsumerState<_ReaderShell> {
             // 公共回调参数（两种模式共用）
             void tapCenter() => setState(() => _menuVisible = !_menuVisible);
             void openChapters() => Scaffold.of(context).openDrawer();
-            void openSettings() => Navigator.of(context)
-                .push(MaterialPageRoute(builder: (_) => const SettingsPage()));
+            void openSettings() => Navigator.of(
+              context,
+            ).push(MaterialPageRoute(builder: (_) => const SettingsPage()));
             void goBack() => Navigator.of(context).pop();
             final onPrevChapter = state.hasPrev
                 ? () => ref
-                    .read(readerProvider(widget.bookId).notifier)
-                    .prevChapter()
+                      .read(readerProvider(widget.bookId).notifier)
+                      .prevChapter()
                 : null;
             final onNextChapter = state.hasNext
                 ? () => ref
-                    .read(readerProvider(widget.bookId).notifier)
-                    .nextChapter()
+                      .read(readerProvider(widget.bookId).notifier)
+                      .nextChapter()
                 : null;
             // 记录最近阅读偏移并写库：非响应式更新 _lastCharOffset，
             // 避免每次翻页都触发 _ReaderShell 重建与重新分页
@@ -169,7 +172,8 @@ class _ReaderShellState extends ConsumerState<_ReaderShell> {
             if (settings.readingMode == ReadingMode.scroll) {
               return _ScrollView(
                 key: ValueKey(
-                    's-${state.book.id}-${state.currentChapterIndex}-${state.jumpToken}-${settings.fontSize.name}-${settings.lineHeight.name}'),
+                  's-${state.book.id}-${state.currentChapterIndex}-${state.jumpToken}-${settings.fontSize.name}-${settings.lineHeight.name}',
+                ),
                 chapterText: state.currentChapterText,
                 padding: _padding,
                 textStyle: textStyle,
@@ -200,7 +204,8 @@ class _ReaderShellState extends ConsumerState<_ReaderShell> {
             );
             return _PaginatedView(
               key: ValueKey(
-                  'p-${state.book.id}-${state.currentChapterIndex}-${state.jumpToken}-${settings.fontSize.name}-${settings.lineHeight.name}-${constraints.maxWidth.toInt()}x${constraints.maxHeight.toInt()}'),
+                'p-${state.book.id}-${state.currentChapterIndex}-${state.jumpToken}-${settings.fontSize.name}-${settings.lineHeight.name}-${constraints.maxWidth.toInt()}x${constraints.maxHeight.toInt()}',
+              ),
               pagination: pagination,
               padding: _padding,
               textStyle: textStyle,
@@ -233,7 +238,9 @@ class _ReaderShellState extends ConsumerState<_ReaderShell> {
       builder: (_) => const _BookmarkNoteDialog(),
     );
     if (note == null) return; // 用户取消
-    await ref.read(bookmarksProvider(widget.bookId).notifier).add(
+    await ref
+        .read(bookmarksProvider(widget.bookId).notifier)
+        .add(
           chapterIndex: chapterIndex,
           charOffset: charOffset,
           note: note.isEmpty ? null : note,
@@ -241,8 +248,10 @@ class _ReaderShellState extends ConsumerState<_ReaderShell> {
     if (mounted) {
       setState(() => _menuVisible = false);
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-            content: Text('书签已添加'), duration: Duration(seconds: 1)),
+        SnackBar(
+          content: Text(context.l10n.bookmarkAdded),
+          duration: const Duration(seconds: 1),
+        ),
       );
     }
   }
@@ -268,25 +277,26 @@ class _BookmarkNoteDialogState extends State<_BookmarkNoteDialog> {
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
-      title: const Text('添加书签'),
+      title: Text(context.l10n.addBookmark),
       content: TextField(
         controller: _controller,
         autofocus: true,
         maxLength: 80,
-        decoration: const InputDecoration(
-          hintText: '备注（可留空）',
+        decoration: InputDecoration(
+          hintText: context.l10n.bookmarkNoteHint,
           border: OutlineInputBorder(),
         ),
         onSubmitted: (v) => Navigator.of(context).pop(v.trim()),
       ),
       actions: [
         TextButton(
-            onPressed: () => Navigator.pop(context, null),
-            child: const Text('取消')),
+          onPressed: () => Navigator.pop(context, null),
+          child: Text(context.l10n.commonCancel),
+        ),
         TextButton(
-            onPressed: () =>
-                Navigator.pop(context, _controller.text.trim()),
-            child: const Text('保存')),
+          onPressed: () => Navigator.pop(context, _controller.text.trim()),
+          child: Text(context.l10n.commonSave),
+        ),
       ],
     );
   }
@@ -337,8 +347,9 @@ class _PaginatedView extends StatefulWidget {
 }
 
 class _PaginatedViewState extends State<_PaginatedView> {
-  late final PageController _ctrl =
-      PageController(initialPage: widget.initialPage);
+  late final PageController _ctrl = PageController(
+    initialPage: widget.initialPage,
+  );
   int _currentPage = 0;
 
   @override
@@ -371,6 +382,7 @@ class _PaginatedViewState extends State<_PaginatedView> {
 
   @override
   Widget build(BuildContext context) {
+    final l10n = context.l10n;
     return Stack(
       children: [
         // 文本页：PageView 切换，无动画
@@ -384,10 +396,7 @@ class _PaginatedViewState extends State<_PaginatedView> {
           },
           itemBuilder: (_, i) => Padding(
             padding: widget.padding,
-            child: Text(
-              widget.pagination.pages[i],
-              style: widget.textStyle,
-            ),
+            child: Text(widget.pagination.pages[i], style: widget.textStyle),
           ),
         ),
         // 透明手势层
@@ -489,17 +498,33 @@ class _PaginatedViewState extends State<_PaginatedView> {
               child: Row(
                 mainAxisAlignment: MainAxisAlignment.spaceAround,
                 children: [
-                  _menuButton(Icons.skip_previous, '上一章',
-                      onTap: widget.onPrevChapter),
-                  _menuButton(Icons.skip_next, '下一章',
-                      onTap: widget.onNextChapter),
-                  _menuButton(Icons.list, '目录和书签',
-                      onTap: widget.onOpenChapters),
-                  _menuButton(Icons.bookmark_add_outlined, '添加书签',
-                      onTap: () => widget.onAddBookmark(
-                          widget.pagination.offsetOfPage(_currentPage))),
-                  _menuButton(Icons.text_fields, '设置',
-                      onTap: widget.onOpenSettings),
+                  _menuButton(
+                    Icons.skip_previous,
+                    l10n.previousChapter,
+                    onTap: widget.onPrevChapter,
+                  ),
+                  _menuButton(
+                    Icons.skip_next,
+                    l10n.nextChapter,
+                    onTap: widget.onNextChapter,
+                  ),
+                  _menuButton(
+                    Icons.list,
+                    l10n.contentsAndBookmarks,
+                    onTap: widget.onOpenChapters,
+                  ),
+                  _menuButton(
+                    Icons.bookmark_add_outlined,
+                    l10n.addBookmark,
+                    onTap: () => widget.onAddBookmark(
+                      widget.pagination.offsetOfPage(_currentPage),
+                    ),
+                  ),
+                  _menuButton(
+                    Icons.text_fields,
+                    l10n.commonSettings,
+                    onTap: widget.onOpenSettings,
+                  ),
                 ],
               ),
             ),
@@ -512,8 +537,7 @@ class _PaginatedViewState extends State<_PaginatedView> {
   bool _currentPageHasBookmark() {
     if (widget.chapterBookmarkOffsets.isEmpty) return false;
     final pageStart = widget.pagination.offsetOfPage(_currentPage);
-    final pageEnd =
-        pageStart + widget.pagination.pages[_currentPage].length;
+    final pageEnd = pageStart + widget.pagination.pages[_currentPage].length;
     for (final off in widget.chapterBookmarkOffsets) {
       if (off >= pageStart && off < pageEnd) return true;
     }
@@ -639,6 +663,7 @@ class _ScrollViewState extends State<_ScrollView> {
 
   @override
   Widget build(BuildContext context) {
+    final l10n = context.l10n;
     return Stack(
       children: [
         // 连续滚动文本；停止滚动时保存进度
@@ -670,13 +695,11 @@ class _ScrollViewState extends State<_ScrollView> {
             right: 0,
             child: Container(
               color: Colors.black.withValues(alpha: 0.5),
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
               child: Row(
                 children: [
                   IconButton(
-                    icon:
-                        const Icon(Icons.arrow_back, color: Colors.white),
+                    icon: const Icon(Icons.arrow_back, color: Colors.white),
                     onPressed: widget.onBack,
                   ),
                   Expanded(
@@ -717,22 +740,35 @@ class _ScrollViewState extends State<_ScrollView> {
             right: 0,
             child: Container(
               color: Colors.black.withValues(alpha: 0.7),
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
               child: Row(
                 mainAxisAlignment: MainAxisAlignment.spaceAround,
                 children: [
-                  _menuBtn(Icons.skip_previous, '上一章',
-                      onTap: widget.onPrevChapter),
-                  _menuBtn(Icons.skip_next, '下一章',
-                      onTap: widget.onNextChapter),
-                  _menuBtn(Icons.list, '目录和书签',
-                      onTap: widget.onOpenChapters),
-                  _menuBtn(Icons.bookmark_add_outlined, '添加书签',
-                      onTap: () =>
-                          widget.onAddBookmark(_currentCharOffset)),
-                  _menuBtn(Icons.text_fields, '设置',
-                      onTap: widget.onOpenSettings),
+                  _menuBtn(
+                    Icons.skip_previous,
+                    l10n.previousChapter,
+                    onTap: widget.onPrevChapter,
+                  ),
+                  _menuBtn(
+                    Icons.skip_next,
+                    l10n.nextChapter,
+                    onTap: widget.onNextChapter,
+                  ),
+                  _menuBtn(
+                    Icons.list,
+                    l10n.contentsAndBookmarks,
+                    onTap: widget.onOpenChapters,
+                  ),
+                  _menuBtn(
+                    Icons.bookmark_add_outlined,
+                    l10n.addBookmark,
+                    onTap: () => widget.onAddBookmark(_currentCharOffset),
+                  ),
+                  _menuBtn(
+                    Icons.text_fields,
+                    l10n.commonSettings,
+                    onTap: widget.onOpenSettings,
+                  ),
                 ],
               ),
             ),

@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../domain/reader_settings.dart';
+import '../../shared/l10n/app_l10n.dart';
+import 'app_locale_provider.dart';
 import 'settings_provider.dart';
 
 class SettingsPage extends ConsumerWidget {
@@ -9,73 +11,111 @@ class SettingsPage extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    final l10n = context.l10n;
     final asyncSettings = ref.watch(readerSettingsProvider);
+    final asyncLocale = ref.watch(appLocaleProvider);
+
     return Scaffold(
-      appBar: AppBar(title: const Text('阅读设置')),
-      body: asyncSettings.when(
-        loading: () => const Center(child: CircularProgressIndicator()),
-        error: (e, _) => Center(child: Text('加载失败：$e')),
-        data: (settings) => _buildBody(context, ref, settings),
-      ),
+      appBar: AppBar(title: Text(l10n.settingsTitle)),
+      body: _buildAsyncBody(context, ref, asyncSettings, asyncLocale),
     );
   }
 
-  Widget _buildBody(BuildContext context, WidgetRef ref, ReaderSettings s) {
-    final notifier = ref.read(readerSettingsProvider.notifier);
+  Widget _buildAsyncBody(
+    BuildContext context,
+    WidgetRef ref,
+    AsyncValue<ReaderSettings> asyncSettings,
+    AsyncValue<AppLocaleMode> asyncLocale,
+  ) {
+    final l10n = context.l10n;
+    if (asyncSettings.isLoading || asyncLocale.isLoading) {
+      return const Center(child: CircularProgressIndicator());
+    }
+    if (asyncSettings.hasError) {
+      return Center(child: Text(l10n.loadFailed(asyncSettings.error!)));
+    }
+    if (asyncLocale.hasError) {
+      return Center(child: Text(l10n.loadFailed(asyncLocale.error!)));
+    }
+    return _buildBody(
+      context,
+      ref,
+      asyncSettings.requireValue,
+      asyncLocale.requireValue,
+    );
+  }
+
+  Widget _buildBody(
+    BuildContext context,
+    WidgetRef ref,
+    ReaderSettings settings,
+    AppLocaleMode localeMode,
+  ) {
+    final l10n = context.l10n;
+    final settingsNotifier = ref.read(readerSettingsProvider.notifier);
+    final localeNotifier = ref.read(appLocaleProvider.notifier);
     return ListView(
       children: [
-        _section('字号'),
+        _section(l10n.systemSettingsSection),
+        _settingLabel(l10n.displayLanguage),
+        _segmentedEnum<AppLocaleMode>(
+          values: AppLocaleMode.values,
+          current: localeMode,
+          labelOf: (v) => _localeLabel(context, v),
+          onChanged: localeNotifier.updateLocaleMode,
+        ),
+        _section(l10n.readingSettingsSection),
+        _settingLabel(l10n.fontSizeSection),
         _segmentedEnum<FontSizeLevel>(
           values: FontSizeLevel.values,
-          current: s.fontSize,
-          labelOf: (v) => switch (v) {
-            FontSizeLevel.small => '小',
-            FontSizeLevel.medium => '中',
-            FontSizeLevel.large => '大',
-            FontSizeLevel.extraLarge => '特大',
-          },
-          onChanged: notifier.updateFontSize,
+          current: settings.fontSize,
+          labelOf: (v) => _fontSizeLabel(context, v),
+          onChanged: settingsNotifier.updateFontSize,
         ),
-        _section('行距'),
+        _settingLabel(l10n.lineHeightSection),
         _segmentedEnum<LineHeightLevel>(
           values: LineHeightLevel.values,
-          current: s.lineHeight,
-          labelOf: (v) => switch (v) {
-            LineHeightLevel.compact => '紧凑',
-            LineHeightLevel.normal => '标准',
-            LineHeightLevel.relaxed => '宽松',
-          },
-          onChanged: notifier.updateLineHeight,
+          current: settings.lineHeight,
+          labelOf: (v) => _lineHeightLabel(context, v),
+          onChanged: settingsNotifier.updateLineHeight,
         ),
-        _section('主题'),
+        _settingLabel(l10n.readerThemeSection),
         _segmentedEnum<ReaderThemeMode>(
           values: ReaderThemeMode.values,
-          current: s.theme,
-          labelOf: (v) => v.label,
-          onChanged: notifier.updateTheme,
+          current: settings.theme,
+          labelOf: (v) => _themeLabel(context, v),
+          onChanged: settingsNotifier.updateTheme,
         ),
-        _section('阅读模式'),
+        _settingLabel(l10n.readingModeSection),
         _segmentedEnum<ReadingMode>(
           values: ReadingMode.values,
-          current: s.readingMode,
-          labelOf: (v) => v.label,
-          onChanged: notifier.updateReadingMode,
+          current: settings.readingMode,
+          labelOf: (v) => _readingModeLabel(context, v),
+          onChanged: settingsNotifier.updateReadingMode,
         ),
         const SizedBox(height: 24),
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: 16),
-          child: _Preview(settings: s),
+          child: _Preview(settings: settings),
         ),
       ],
     );
   }
 
   Widget _section(String label) => Padding(
-        padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
-        child: Text(label, style: const TextStyle(fontWeight: FontWeight.bold)),
-      );
+    padding: const EdgeInsets.fromLTRB(16, 20, 16, 8),
+    child: Text(
+      label,
+      style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+    ),
+  );
 
-  // 通用 enum 选择器
+  Widget _settingLabel(String label) => Padding(
+    padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+    child: Text(label, style: const TextStyle(fontWeight: FontWeight.w600)),
+  );
+
+  // 通用 enum 选择器：显示文本由调用方按当前 l10n 解析。
   Widget _segmentedEnum<T extends Enum>({
     required List<T> values,
     required T current,
@@ -93,15 +133,56 @@ class SettingsPage extends ConsumerWidget {
       ),
     );
   }
+
+  String _localeLabel(BuildContext context, AppLocaleMode mode) {
+    final l10n = context.l10n;
+    return switch (mode) {
+      AppLocaleMode.system => l10n.languageSystem,
+      AppLocaleMode.simplifiedChinese => l10n.languageSimplifiedChinese,
+      AppLocaleMode.english => l10n.languageEnglish,
+    };
+  }
+
+  String _fontSizeLabel(BuildContext context, FontSizeLevel level) {
+    final l10n = context.l10n;
+    return switch (level) {
+      FontSizeLevel.small => l10n.fontSizeSmall,
+      FontSizeLevel.medium => l10n.fontSizeMedium,
+      FontSizeLevel.large => l10n.fontSizeLarge,
+      FontSizeLevel.extraLarge => l10n.fontSizeExtraLarge,
+    };
+  }
+
+  String _lineHeightLabel(BuildContext context, LineHeightLevel level) {
+    final l10n = context.l10n;
+    return switch (level) {
+      LineHeightLevel.compact => l10n.lineHeightCompact,
+      LineHeightLevel.normal => l10n.lineHeightNormal,
+      LineHeightLevel.relaxed => l10n.lineHeightRelaxed,
+    };
+  }
+
+  String _themeLabel(BuildContext context, ReaderThemeMode mode) {
+    final l10n = context.l10n;
+    return switch (mode) {
+      ReaderThemeMode.light => l10n.readerThemeLight,
+      ReaderThemeMode.dark => l10n.readerThemeDark,
+      ReaderThemeMode.sepia => l10n.readerThemeSepia,
+    };
+  }
+
+  String _readingModeLabel(BuildContext context, ReadingMode mode) {
+    final l10n = context.l10n;
+    return switch (mode) {
+      ReadingMode.paginated => l10n.readingModePaginated,
+      ReadingMode.scroll => l10n.readingModeScroll,
+    };
+  }
 }
 
 class _Preview extends StatelessWidget {
   final ReaderSettings settings;
   const _Preview({required this.settings});
-
-  static const _sampleText =
-      '夜色如水，月光在屋檐上铺成薄薄一层霜。她合上书本，'
-      '听到风穿过竹林的声音，像极了多年前在江南听过的那一阵。';
 
   @override
   Widget build(BuildContext context) {
@@ -113,7 +194,7 @@ class _Preview extends StatelessWidget {
         border: Border.all(color: Colors.grey.shade300),
       ),
       child: Text(
-        _sampleText,
+        context.l10n.settingsPreviewText,
         style: TextStyle(
           color: settings.theme.foreground,
           fontSize: settings.fontSize.size,

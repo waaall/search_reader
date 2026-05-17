@@ -3,6 +3,8 @@ import 'package:flutter_animate/flutter_animate.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/db/daos.dart';
+import '../../shared/l10n/app_formatters.dart';
+import '../../shared/l10n/app_l10n.dart';
 import '../../shared/theme/app_tokens.dart';
 import '../reader/reader_page.dart';
 import 'all_bookmarks_provider.dart';
@@ -14,10 +16,10 @@ class AllBookmarksPage extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final asyncList = ref.watch(allBookmarksProvider);
     return Scaffold(
-      appBar: AppBar(title: const Text('书签')),
+      appBar: AppBar(title: Text(context.l10n.bookmarksTitle)),
       body: asyncList.when(
         loading: () => const Center(child: CircularProgressIndicator()),
-        error: (e, _) => Center(child: Text('加载失败：$e')),
+        error: (e, _) => Center(child: Text(context.l10n.loadFailed(e))),
         data: (list) {
           if (list.isEmpty) {
             return const _EmptyHint();
@@ -31,14 +33,16 @@ class AllBookmarksPage extends ConsumerWidget {
             itemCount: rows.length,
             separatorBuilder: (_, i) {
               final r = rows[i];
-              return r is _BookmarkRow ? const Divider(height: 1) : const SizedBox.shrink();
+              return r is _BookmarkRow
+                  ? const Divider(height: 1)
+                  : const SizedBox.shrink();
             },
             itemBuilder: (_, i) {
               final r = rows[i];
               if (r is _BookHeaderRow) {
-                return _BookHeader(title: r.title)
-                    .animate()
-                    .fadeIn(duration: AppMotion.fast);
+                return _BookHeader(
+                  title: r.title,
+                ).animate().fadeIn(duration: AppMotion.fast);
               }
               if (r is _BookmarkRow) {
                 return _BookmarkTile(
@@ -140,35 +144,40 @@ class _BookmarkTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final note = item.bookmark.note?.trim();
+    final createdAt = AppFormatters.relativeTime(
+      context,
+      item.bookmark.createdAt,
+    );
+    final chapterTitle = item.chapterTitle.isEmpty
+        ? context.l10n.unknownChapter
+        : item.chapterTitle;
     return ListTile(
-      title: Text(
-        item.chapterTitle,
-        maxLines: 1,
-        overflow: TextOverflow.ellipsis,
-      ),
+      title: Text(chapterTitle, maxLines: 1, overflow: TextOverflow.ellipsis),
       subtitle: note != null && note.isNotEmpty
-          ? Text('$note  ·  ${_formatTime(item.bookmark.createdAt)}',
-              maxLines: 2, overflow: TextOverflow.ellipsis)
-          : Text(
-              _formatTime(item.bookmark.createdAt),
-              style: const TextStyle(color: Colors.grey),
-            ),
+          ? Text(
+              '$note  ·  $createdAt',
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+            )
+          : Text(createdAt, style: const TextStyle(color: Colors.grey)),
       trailing: IconButton(
-        tooltip: '删除',
+        tooltip: context.l10n.commonDelete,
         icon: const Icon(Icons.delete_outline, size: 20),
         onPressed: () async {
           final confirmed = await showDialog<bool>(
             context: context,
             builder: (_) => AlertDialog(
-              title: const Text('删除书签'),
-              content: const Text('确定删除这条书签？'),
+              title: Text(context.l10n.deleteBookmark),
+              content: Text(context.l10n.confirmDeleteBookmark),
               actions: [
                 TextButton(
-                    onPressed: () => Navigator.pop(context, false),
-                    child: const Text('取消')),
+                  onPressed: () => Navigator.pop(context, false),
+                  child: Text(context.l10n.commonCancel),
+                ),
                 TextButton(
-                    onPressed: () => Navigator.pop(context, true),
-                    child: const Text('删除')),
+                  onPressed: () => Navigator.pop(context, true),
+                  child: Text(context.l10n.commonDelete),
+                ),
               ],
             ),
           );
@@ -178,16 +187,6 @@ class _BookmarkTile extends StatelessWidget {
       onTap: onTap,
     );
   }
-
-  String _formatTime(DateTime t) {
-    final now = DateTime.now();
-    final diff = now.difference(t);
-    if (diff.inMinutes < 1) return '刚刚';
-    if (diff.inHours < 1) return '${diff.inMinutes} 分钟前';
-    if (diff.inDays < 1) return '${diff.inHours} 小时前';
-    if (diff.inDays < 30) return '${diff.inDays} 天前';
-    return '${t.year}-${t.month.toString().padLeft(2, '0')}-${t.day.toString().padLeft(2, '0')}';
-  }
 }
 
 class _EmptyHint extends StatelessWidget {
@@ -196,20 +195,26 @@ class _EmptyHint extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Center(
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(Icons.bookmark_border,
-              size: 96, color: Colors.grey.shade400),
-          const SizedBox(height: AppSpacing.md),
-          const Text('还没有书签\n阅读时点底部「书签」按钮可添加',
-              textAlign: TextAlign.center,
-              style: TextStyle(color: Colors.grey)),
-        ],
-      )
-          .animate()
-          .fadeIn(duration: AppMotion.normal)
-          .slideY(begin: 0.1, end: 0, duration: AppMotion.normal),
+      child:
+          Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(
+                    Icons.bookmark_border,
+                    size: 96,
+                    color: Colors.grey.shade400,
+                  ),
+                  const SizedBox(height: AppSpacing.md),
+                  Text(
+                    context.l10n.emptyBookmarksHint,
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(color: Colors.grey),
+                  ),
+                ],
+              )
+              .animate()
+              .fadeIn(duration: AppMotion.normal)
+              .slideY(begin: 0.1, end: 0, duration: AppMotion.normal),
     );
   }
 }
