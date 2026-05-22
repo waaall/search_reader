@@ -2,6 +2,8 @@ import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
+import '../storage/book_storage.dart';
+
 // 数据库版本：每次 Schema 变更需要 +1
 // v2：FTS5 trigram → unicode61 + bigram 化的 search 列；chapters 加 content 列
 // v3：新增 bookmarks 表（书签：章节内字符偏移 + 可选备注）
@@ -52,6 +54,11 @@ class AppDatabase {
         // drop & recreate：旧数据全部丢弃，结构按新版重建
         await _dropSchema(db);
         await _createSchema(db);
+        // 旧书记录已丢弃，同步清掉沙盒里的孤儿书籍文件
+        // 清理失败不阻断迁移：DB 结构已就绪，文件残留可接受
+        try {
+          await BookStorage.purgeAll();
+        } catch (_) {}
       },
     );
 

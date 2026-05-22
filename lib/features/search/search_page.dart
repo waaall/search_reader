@@ -133,6 +133,7 @@ class _HitTile extends StatelessWidget {
           builder: (_) => ReaderPage(
             bookId: hit.bookId,
             initialChapterIndex: hit.chapterIndex,
+            initialCharOffset: hit.charOffset,
           ),
         ),
       ),

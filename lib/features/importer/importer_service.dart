@@ -51,6 +51,7 @@ class ImporterService {
   }) async {
     final ext = p.extension(externalPath).toLowerCase();
     String? sandboxRelativePath;
+    int? insertedBookId; // 已写入的 books 行 id：失败时需连带回滚
     try {
       final parser = _pickParser(externalPath);
 
@@ -78,6 +79,7 @@ class ImporterService {
         encoding: parsed.encoding,
         totalChars: parsed.totalChars,
       );
+      insertedBookId = book.id;
       await _chapterDao.insertAll(book.id, parsed.chapters);
 
       onProgress?.call(ImportPhase.done);
@@ -88,18 +90,27 @@ class ImporterService {
         totalChars: parsed.totalChars,
       );
     } on DecodingException catch (e) {
-      // 沙盒文件已经写入，需要回滚
-      if (sandboxRelativePath != null) {
-        await BookStorage.deleteFile(sandboxRelativePath);
-      }
+      await _rollback(sandboxRelativePath, insertedBookId);
       throw ImportException.decodingFailed(e);
     } on ImportException {
       rethrow;
     } catch (e) {
-      if (sandboxRelativePath != null) {
-        await BookStorage.deleteFile(sandboxRelativePath);
-      }
+      await _rollback(sandboxRelativePath, insertedBookId);
       throw ImportException.unexpected(e);
+    }
+  }
+
+  // 导入失败回滚：删掉已写入的 books 行（级联清章节与 FTS）与沙盒文件
+  // 章节索引失败时，books 行已提交、insertAll 事务已回滚，此时只删 books 行即可
+  // 回滚自身的异常吞掉：避免掩盖真正的导入失败原因
+  Future<void> _rollback(String? sandboxRelativePath, int? bookId) async {
+    if (bookId != null) {
+      try {
+        await _bookDao.delete(bookId);
+      } catch (_) {}
+    }
+    if (sandboxRelativePath != null) {
+      await BookStorage.deleteFile(sandboxRelativePath);
     }
   }
 

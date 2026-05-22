@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../domain/reader_settings.dart';
 import '../../shared/l10n/app_l10n.dart';
+import '../library/library_provider.dart';
 import '../settings/settings_page.dart';
 import '../settings/settings_provider.dart';
 import 'bookmark_provider.dart';
@@ -105,6 +106,14 @@ class _ReaderShellState extends ConsumerState<_ReaderShell> {
     if (oldWidget.state.jumpToken != widget.state.jumpToken) {
       _lastCharOffset = null;
     }
+  }
+
+  @override
+  void dispose() {
+    // 离开阅读页时刷新书架：阅读时已写入 last_read_at，
+    // 让书架的"最近阅读"排序与未读标签在返回后立即生效
+    ref.invalidate(libraryProvider);
+    super.dispose();
   }
 
   @override

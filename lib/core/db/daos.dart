@@ -300,6 +300,7 @@ class SearchHit {
   final int chapterIndex;
   final String chapterTitle;
   final String snippet; // 含 <mark> 标记的上下文片段
+  final int charOffset; // 命中关键词在章节内的字符偏移，用于跳转定位
 
   const SearchHit({
     required this.bookId,
@@ -308,6 +309,7 @@ class SearchHit {
     required this.chapterIndex,
     required this.chapterTitle,
     required this.snippet,
+    required this.charOffset,
   });
 }
 
@@ -341,15 +343,17 @@ class SearchDao {
       ''',
       [ftsQuery],
     );
-    return rows
-        .map((r) => SearchHit(
-              bookId: r['book_id'] as int,
-              bookTitle: r['book_title'] as String,
-              chapterId: r['chapter_id'] as int,
-              chapterIndex: r['chapter_index'] as int,
-              chapterTitle: r['chapter_title'] as String,
-              snippet: makeSnippet(r['chapter_content'] as String, rawQuery),
-            ))
-        .toList();
+    return rows.map((r) {
+      final content = r['chapter_content'] as String;
+      return SearchHit(
+        bookId: r['book_id'] as int,
+        bookTitle: r['book_title'] as String,
+        chapterId: r['chapter_id'] as int,
+        chapterIndex: r['chapter_index'] as int,
+        chapterTitle: r['chapter_title'] as String,
+        snippet: makeSnippet(content, rawQuery),
+        charOffset: findMatchOffset(content, rawQuery),
+      );
+    }).toList();
   }
 }

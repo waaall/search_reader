@@ -57,4 +57,15 @@ class BookStorage {
       await f.delete();
     }
   }
+
+  // 清空整个沙盒书籍目录
+  // 数据库 drop & recreate 迁移会丢弃所有书记录，需同步删除实体文件，
+  // 否则旧书文件成孤儿永久占盘
+  static Future<void> purgeAll() async {
+    final root = await _root();
+    final dir = Directory(p.join(root.path, _booksDir));
+    if (await dir.exists()) {
+      await dir.delete(recursive: true);
+    }
+  }
 }
