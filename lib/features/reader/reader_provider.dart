@@ -1,10 +1,6 @@
-import 'dart:io';
-import 'dart:typed_data';
-
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/db/daos.dart';
-import '../../core/encoding/text_decoder.dart';
 import '../../core/storage/book_storage.dart';
 import '../../domain/book.dart';
 import '../../domain/chapter.dart';
@@ -130,11 +126,7 @@ class ReaderNotifier extends AutoDisposeFamilyAsyncNotifier<ReaderState, int> {
   // 读全文（带缓存）
   Future<void> _ensureFullText(Book book) async {
     if (_fullText != null) return;
-    final abs = await BookStorage.resolveAbsolute(book.filePath);
-    final bytes = await File(abs).readAsBytes();
-    final decoded = TextDecoder.decode(Uint8List.fromList(bytes));
-    _fullText =
-        decoded.content.replaceAll('\r\n', '\n').replaceAll('\r', '\n');
+    _fullText = await BookStorage.readFullText(book.filePath);
   }
 
   // 按章节起止位置截取文本

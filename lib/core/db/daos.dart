@@ -101,7 +101,6 @@ class ChapterDao {
           'title': c.title,
           'start_char': c.startChar,
           'end_char': c.endChar,
-          'content': c.content,
         });
         // FTS5 行用同一个 rowid，便于 join；title/search 都做 bigram 化
         // 这样用户搜 "你好"（2 字）能命中标题或正文里的连续 "你好"
@@ -313,27 +312,49 @@ class SearchHit {
   });
 }
 
+// 搜索命中的原始行：DAO 只返回元信息 + 起止位置 + 文件路径，
+// snippet 与命中字符偏移由 SearchService 用沙盒文件切片在 Dart 侧生成
+class ChapterMatchRow {
+  final int bookId;
+  final String bookTitle;
+  final String bookFilePath;
+  final int chapterId;
+  final int chapterIndex;
+  final String chapterTitle;
+  final int chapterStart;
+  final int chapterEnd;
+
+  const ChapterMatchRow({
+    required this.bookId,
+    required this.bookTitle,
+    required this.bookFilePath,
+    required this.chapterId,
+    required this.chapterIndex,
+    required this.chapterTitle,
+    required this.chapterStart,
+    required this.chapterEnd,
+  });
+}
+
 class SearchDao {
   Database get _db => AppDatabase.instance.db;
 
-  // 跨书全文搜索：限制返回 100 条以避免 UI 卡顿
+  // 跨书全文搜索：返回命中行的元信息 + 起止位置 + 文件路径，最多 100 条
   // [ftsQuery] 已 bigram 化的 FTS5 MATCH 表达式
-  // [rawQuery] 用户原始输入，用于在 Dart 侧从 chapters.content 生成 snippet
-  // （FTS5 内部存的是 bigram 序列，自带 snippet() 出来的位置不映射到原文，所以自己做）
-  Future<List<SearchHit>> search({
-    required String ftsQuery,
-    required String rawQuery,
-  }) async {
+  // 沙盒文件读取与 snippet 生成交给 SearchService，DAO 层不做文件 I/O
+  Future<List<ChapterMatchRow>> queryMatches(String ftsQuery) async {
     if (ftsQuery.trim().isEmpty) return const [];
     final rows = await _db.rawQuery(
       '''
       SELECT
         b.id AS book_id,
         b.title AS book_title,
+        b.file_path AS book_file_path,
         c.id AS chapter_id,
         c.chapter_index AS chapter_index,
         c.title AS chapter_title,
-        c.content AS chapter_content
+        c.start_char AS chapter_start,
+        c.end_char AS chapter_end
       FROM chapters_fts
       JOIN chapters c ON chapters_fts.rowid = c.id
       JOIN books b ON c.book_id = b.id
@@ -343,17 +364,17 @@ class SearchDao {
       ''',
       [ftsQuery],
     );
-    return rows.map((r) {
-      final content = r['chapter_content'] as String;
-      return SearchHit(
-        bookId: r['book_id'] as int,
-        bookTitle: r['book_title'] as String,
-        chapterId: r['chapter_id'] as int,
-        chapterIndex: r['chapter_index'] as int,
-        chapterTitle: r['chapter_title'] as String,
-        snippet: makeSnippet(content, rawQuery),
-        charOffset: findMatchOffset(content, rawQuery),
-      );
-    }).toList();
+    return rows
+        .map((r) => ChapterMatchRow(
+              bookId: r['book_id'] as int,
+              bookTitle: r['book_title'] as String,
+              bookFilePath: r['book_file_path'] as String,
+              chapterId: r['chapter_id'] as int,
+              chapterIndex: r['chapter_index'] as int,
+              chapterTitle: r['chapter_title'] as String,
+              chapterStart: r['chapter_start'] as int,
+              chapterEnd: r['chapter_end'] as int,
+            ))
+        .toList();
   }
 }

@@ -146,7 +146,7 @@ CREATE TABLE books (
   last_read_at INTEGER             -- 最近阅读时间
 );
 
--- 章节表：content 保存章节原文，用于搜索 snippet
+-- 章节表：只存元信息与起止位置，正文与搜索 snippet 都按起止位置切沙盒文件
 CREATE TABLE chapters (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   book_id INTEGER NOT NULL,
@@ -154,7 +154,6 @@ CREATE TABLE chapters (
   title TEXT NOT NULL,
   start_char INTEGER NOT NULL,     -- 在全书纯文本中的起始字符位置
   end_char INTEGER NOT NULL,       -- 在全书纯文本中的结束字符位置
-  content TEXT NOT NULL,
   FOREIGN KEY (book_id) REFERENCES books(id) ON DELETE CASCADE
 );
 CREATE INDEX idx_chapters_book ON chapters(book_id, chapter_index);
@@ -199,7 +198,7 @@ CREATE INDEX idx_bookmarks_book
 
 **Schema 设计要点**：
 
-- `chapters.content` 存章节原文，用于搜索结果生成 snippet；阅读器正文仍走“沙盒文件 + 起止位置截取”，两条路径互不阻塞。
+- 阅读器正文与搜索 snippet 都按起止位置从沙盒文件切片（`BookStorage.readFullText`），避免在数据库里再保留一整份书。
 - FTS5 用 **unicode61 + Dart 侧 bigram 化**：原文 `你好世界` → 索引序列 `你好 好世 世界`，每个 bigram 作为完整 token。
 - 查询同样 bigram 化 + 紧邻短语：`你好世` → `("你好" + "好世")`，等价于原文连续出现 `你好世`。
 - `bookmarks` 通过 `(book_id, chapter_index, char_offset)` 唯一约束去重；重复加书签时覆盖 note / created_at。
@@ -355,7 +354,8 @@ class ReaderSettings {
 
 ```sql
 SELECT
-  b.id, b.title, c.id, c.chapter_index, c.title, c.content
+  b.id, b.title, b.file_path,
+  c.id, c.chapter_index, c.title, c.start_char, c.end_char
 FROM chapters_fts
 JOIN chapters c ON chapters_fts.rowid = c.id
 JOIN books b ON c.book_id = b.id
@@ -364,7 +364,7 @@ ORDER BY rank
 LIMIT 100;
 ```
 
-**Snippet**：FTS5 内部存的是 bigram 序列，自带 `snippet()` 的位置不映射回原文。改在 Dart 侧 `makeSnippet(content, rawQuery)` 从 `chapters.content` 找匹配位置，截取前后上下文并加 `<mark>` 高亮。
+**Snippet**：FTS5 内部存的是 bigram 序列，自带 `snippet()` 的位置不映射回原文。`SearchService` 拿到命中行后按 `(book.file_path, start_char, end_char)` 切沙盒文件得到原章节内容，再调用 `makeSnippet` / `findMatchOffset` 在 Dart 侧生成上下文片段与跳转字符偏移；同一本书的多个命中只读一次文件。
 
 ### 5.7 文件存储（core/storage/book_storage.dart）
 

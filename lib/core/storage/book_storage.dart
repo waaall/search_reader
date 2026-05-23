@@ -4,6 +4,8 @@ import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:uuid/uuid.dart';
 
+import '../encoding/text_decoder.dart';
+
 // 沙盒内书籍文件管理
 // 路径策略：appDocs/books/<uuid>.<ext>
 //   - 数据库 books.file_path 存相对路径 books/<uuid>.<ext>，避免沙盒迁移失效
@@ -47,6 +49,16 @@ class BookStorage {
   static Future<String> resolveAbsolute(String relativePath) async {
     final root = await _root();
     return p.join(root.path, relativePath);
+  }
+
+  // 读取沙盒书籍文件并解码为统一换行（\n）的纯文本
+  // 字符位置（chapters.start_char/end_char、阅读进度、书签）都基于此文本
+  // Reader 与 Search 共用此入口，保证字符坐标一致
+  static Future<String> readFullText(String relativePath) async {
+    final abs = await resolveAbsolute(relativePath);
+    final bytes = await File(abs).readAsBytes();
+    final decoded = TextDecoder.decode(bytes);
+    return decoded.content.replaceAll('\r\n', '\n').replaceAll('\r', '\n');
   }
 
   // 删除沙盒中的文件（数据库行由调用方处理）

@@ -81,6 +81,12 @@ class _ReaderShellState extends ConsumerState<_ReaderShell> {
   // 切换阅读模式、改字号等导致视图重建时用它保留当前位置；发生跳转后置空。
   int? _lastCharOffset;
 
+  // 分页结果缓存：仅当 (章节/字号/行距/可用宽高) 任一变化时重算
+  // 同一 _ReaderShell 内加书签等无关 rebuild 会触发 build()，
+  // 但分页输入未变，复用缓存避免主线程同步重新跑 TextPainter layout
+  Pagination? _cachedPagination;
+  String? _paginationCacheKey;
+
   // 内边距：上下留出顶部菜单与页码空间
   static const _padding = EdgeInsets.fromLTRB(20, 48, 20, 32);
 
@@ -114,6 +120,32 @@ class _ReaderShellState extends ConsumerState<_ReaderShell> {
     // 让书架的"最近阅读"排序与未读标签在返回后立即生效
     ref.invalidate(libraryProvider);
     super.dispose();
+  }
+
+  // 按 (章节/字号/行距/可用宽高) 缓存分页结果；颜色等不影响布局，不入键
+  Pagination _paginate({
+    required String text,
+    required TextStyle style,
+    required double contentWidth,
+    required double contentHeight,
+    required int chapterIndex,
+    required String fontSizeName,
+    required String lineHeightName,
+  }) {
+    final key =
+        '$chapterIndex|$fontSizeName|$lineHeightName|${contentWidth.toInt()}|${contentHeight.toInt()}';
+    if (key == _paginationCacheKey && _cachedPagination != null) {
+      return _cachedPagination!;
+    }
+    final p = TextPaginator.paginate(
+      text: text,
+      style: style,
+      contentWidth: contentWidth,
+      contentHeight: contentHeight,
+    );
+    _paginationCacheKey = key;
+    _cachedPagination = p;
+    return p;
   }
 
   @override
@@ -205,11 +237,14 @@ class _ReaderShellState extends ConsumerState<_ReaderShell> {
             // 翻页模式：仅此分支需要分页计算
             final contentWidth = constraints.maxWidth - _padding.horizontal;
             final contentHeight = constraints.maxHeight - _padding.vertical;
-            final pagination = TextPaginator.paginate(
+            final pagination = _paginate(
               text: state.currentChapterText,
               style: textStyle,
               contentWidth: contentWidth,
               contentHeight: contentHeight,
+              chapterIndex: state.currentChapterIndex,
+              fontSizeName: settings.fontSize.name,
+              lineHeightName: settings.lineHeight.name,
             );
             return _PaginatedView(
               key: ValueKey(

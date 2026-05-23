@@ -72,4 +72,39 @@ void main() {
       expect(s.contains('<mark>李寻欢</mark>'), true);
     });
   });
+
+  group('findMatchOffset', () {
+    test('找到关键词时返回原文位置', () {
+      const content = '夜色如水，月光在屋檐上铺成薄薄一层霜。';
+      expect(findMatchOffset(content, '月光'), content.indexOf('月光'));
+    });
+
+    test('多关键词优先用最长的找位置', () {
+      const content = '城门外，李寻欢的飞刀已经出鞘。';
+      // "李" 与 "李寻欢" 都在原文中，应取最长的 "李寻欢" 的位置
+      expect(findMatchOffset(content, '李 李寻欢'), content.indexOf('李寻欢'));
+    });
+
+    test('整词不连续出现时退化用第一个 bigram 定位', () {
+      // "你好世" 不在原文连续出现，但 bigram "你好" 在
+      // FTS 按 bigram AND 命中也可能落到这种情况
+      const content = '前面是你好的内容，后面有世界两个字。';
+      expect(findMatchOffset(content, '你好世'), content.indexOf('你好'));
+    });
+
+    test('完全没找到时返回 0', () {
+      const content = '这是一段不含关键词的文字。';
+      expect(findMatchOffset(content, '武功'), 0);
+    });
+
+    test('空 query 返回 0', () {
+      expect(findMatchOffset('任意内容', ''), 0);
+      expect(findMatchOffset('任意内容', '   '), 0);
+    });
+
+    test('关键词在原文首位时返回 0', () {
+      const content = '月光下的小镇安静。';
+      expect(findMatchOffset(content, '月光'), 0);
+    });
+  });
 }

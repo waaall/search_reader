@@ -7,8 +7,9 @@ import '../storage/book_storage.dart';
 // 数据库版本：每次 Schema 变更需要 +1
 // v2：FTS5 trigram → unicode61 + bigram 化的 search 列；chapters 加 content 列
 // v3：新增 bookmarks 表（书签：章节内字符偏移 + 可选备注）
+// v4：移除 chapters.content（搜索 snippet 改为按起止位置切沙盒文件，节省 DB 体积）
 // 升级策略：drop & recreate（旧数据不保留，需要重新导入）
-const int _kDbVersion = 3;
+const int _kDbVersion = 4;
 const String _kDbFileName = 'search_reader.db';
 
 // 单例数据库句柄：通过 [appDatabase] 全局访问
@@ -87,8 +88,8 @@ Future<void> _createSchema(Database db) async {
     )
   ''');
 
-  // chapters.content 存章节原文：搜索结果生成 snippet 用
-  // （reader 仍走沙盒文件 + 起止位置截取的旧路径，互不影响）
+  // chapters 只存元信息与起止位置；正文与搜索 snippet 都按起止位置切沙盒文件，
+  // 避免在数据库里再保留一整份书（原 chapters.content 列已移除）
   await db.execute('''
     CREATE TABLE chapters (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -97,7 +98,6 @@ Future<void> _createSchema(Database db) async {
       title TEXT NOT NULL,
       start_char INTEGER NOT NULL,
       end_char INTEGER NOT NULL,
-      content TEXT NOT NULL,
       FOREIGN KEY (book_id) REFERENCES books(id) ON DELETE CASCADE
     )
   ''');
