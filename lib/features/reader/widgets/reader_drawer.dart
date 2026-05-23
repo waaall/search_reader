@@ -93,7 +93,8 @@ class _ChaptersTab extends StatelessWidget {
             ),
           ),
           onTap: () {
-            Navigator.of(context).pop();
+            // 只关闭抽屉，不走页面 Navigator.pop，避免触发阅读页退出逻辑
+            Scaffold.of(context).closeDrawer();
             onJump(i);
           },
         );
@@ -139,7 +140,8 @@ class _BookmarksTab extends ConsumerWidget {
             bookmark: bookmarks[i],
             chapterTitle: _chapterTitleOf(context, bookmarks[i].chapterIndex),
             onTap: () {
-              Navigator.of(context).pop();
+              // 只关闭抽屉，不走页面 Navigator.pop，避免触发阅读页退出逻辑
+              Scaffold.of(context).closeDrawer();
               onJump(bookmarks[i].chapterIndex, bookmarks[i].charOffset);
             },
             onDelete: () => ref

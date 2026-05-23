@@ -94,11 +94,9 @@ String makeSnippet(String content, String rawQuery, {int contextChars = 24}) {
     return _ellipsisHead(normalized, contextChars * 2);
   }
   // 多关键词时，优先用最长的那个找位置（更具体）
-  final candidates = rawQuery
-      .split(RegExp(r'\s+'))
-      .where((g) => g.isNotEmpty)
-      .toList()
-    ..sort((a, b) => b.length.compareTo(a.length));
+  final candidates =
+      rawQuery.split(RegExp(r'\s+')).where((g) => g.isNotEmpty).toList()
+        ..sort((a, b) => b.length.compareTo(a.length));
 
   for (final kw in candidates) {
     final idx = normalized.indexOf(kw);
@@ -119,7 +117,11 @@ String makeSnippet(String content, String rawQuery, {int contextChars = 24}) {
 }
 
 String _buildHighlightedSegment(
-    String normalized, String keyword, int idx, int ctx) {
+  String normalized,
+  String keyword,
+  int idx,
+  int ctx,
+) {
   final start = (idx - ctx).clamp(0, normalized.length);
   final end = (idx + keyword.length + ctx).clamp(0, normalized.length);
   final prefix = start > 0 ? '...' : '';
@@ -137,15 +139,13 @@ String _ellipsisHead(String text, int len) {
 
 // 在原文中定位关键词，返回章节内字符偏移，供搜索结果跳转到命中位置
 // 与 makeSnippet 不同：makeSnippet 在归一化文本上找位置只为展示片段，
-// 这里必须用原文偏移——reader 的章节文本与字符偏移都基于原文（chapters.content）
+// 这里必须用原文偏移——reader 的章节文本与字符偏移都基于沙盒全文切片
 // 多关键词时优先用最长的；都没找到时返回 0（落到章节开头）
 int findMatchOffset(String content, String rawQuery) {
   if (rawQuery.trim().isEmpty) return 0;
-  final candidates = rawQuery
-      .split(RegExp(r'\s+'))
-      .where((g) => g.isNotEmpty)
-      .toList()
-    ..sort((a, b) => b.length.compareTo(a.length));
+  final candidates =
+      rawQuery.split(RegExp(r'\s+')).where((g) => g.isNotEmpty).toList()
+        ..sort((a, b) => b.length.compareTo(a.length));
   if (candidates.isEmpty) return 0;
 
   for (final kw in candidates) {

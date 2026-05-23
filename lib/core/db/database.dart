@@ -24,7 +24,8 @@ class AppDatabase {
     final inst = _instance;
     if (inst == null) {
       throw StateError(
-          'AppDatabase is not initialized. Call AppDatabase.init() first.');
+        'AppDatabase is not initialized. Call AppDatabase.init() first.',
+      );
     }
     return inst;
   }
@@ -102,7 +103,8 @@ Future<void> _createSchema(Database db) async {
     )
   ''');
   await db.execute(
-      'CREATE INDEX idx_chapters_book ON chapters(book_id, chapter_index)');
+    'CREATE INDEX idx_chapters_book ON chapters(book_id, chapter_index)',
+  );
 
   await db.execute('''
     CREATE TABLE reading_progress (
@@ -118,7 +120,7 @@ Future<void> _createSchema(Database db) async {
   // 选择 bigram 而非 trigram：让 ≥2 字符的中文关键词也能搜到（trigram 至少要 3 字）
   // 不用 contentless 模式：老版本 SQLite（Android 13 及以下）不支持 contentless DELETE
   // 代价：FTS5 表内多存一份 bigram 序列（约原文 2x），换来跨平台稳定的 DELETE
-  // snippet 不依赖 FTS5 内部内容，由 Dart 侧从 chapters.content 生成
+  // snippet 不依赖 FTS5 内部内容，由 Dart 侧按章节起止位置切沙盒文件生成
   await db.execute('''
     CREATE VIRTUAL TABLE chapters_fts USING fts5(
       title,
@@ -148,9 +150,11 @@ Future<void> _createSchema(Database db) async {
     )
   ''');
   await db.execute(
-      'CREATE UNIQUE INDEX idx_bookmarks_pos ON bookmarks(book_id, chapter_index, char_offset)');
+    'CREATE UNIQUE INDEX idx_bookmarks_pos ON bookmarks(book_id, chapter_index, char_offset)',
+  );
   await db.execute(
-      'CREATE INDEX idx_bookmarks_book ON bookmarks(book_id, created_at DESC)');
+    'CREATE INDEX idx_bookmarks_book ON bookmarks(book_id, created_at DESC)',
+  );
 }
 
 // 删除全部表：升级时先 drop 再 recreate

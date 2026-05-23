@@ -1,10 +1,12 @@
 # 技术设计文档
 
-> 版本：v0.3（2026-05-16）
+> 版本：v0.4（2026-05-23）
 > 对应产品需求：[01-product-requirements.md](../demand/01-product-requirements.md)
 > 构建与分发：[03-build-and-release.md](./03-build-and-release.md)
 
 v0.3 补充：数据库后端从系统 SQLite 切换到全平台自带 `sqlite3` v3（修复 Android 系统 SQLite 缺 FTS5 导致的启动失败），新增数据库初始化失败的兜底错误页。
+
+v0.4 补充：`chapters.content` 冗余列已移除，搜索 snippet 改为按章节起止位置切沙盒文件生成；阅读进度保存改为“写数据库 + 同步内存状态 + 串行化写入”，并在跳章/跳书签/搜索跳转/退出阅读页时立即保存，避免返回书架后再次进入仍回到旧位置。
 
 ## 1. 技术栈选型
 
@@ -77,7 +79,7 @@ lib/
 │   │   ├── daos.dart              # Book / Chapter / Progress / Bookmark / Settings DAO
 │   │   └── text_index.dart        # bigram 索引与查询表达式构造
 │   ├── storage/
-│   │   └── book_storage.dart      # 沙盒目录、文件拷贝
+│   │   └── book_storage.dart      # 沙盒目录、文件拷贝、全文读取、清理
 │   ├── encoding/
 │   │   └── text_decoder.dart      # 编码检测与解码
 │   └── parser/
@@ -296,10 +298,20 @@ class ReaderSettings {
 `readerProvider` 使用 `AsyncNotifierProvider.autoDispose.family`：
 
 - 进入阅读页时读取书籍、章节、数据库进度，构造 `ReaderState`。
-- 离开阅读页后自动销毁 provider；再次进入时重新从数据库读取最新进度，避免内存状态覆盖已保存进度。
-- `prevChapter()` / `nextChapter()` / 搜索或书签跳转会更新 `currentChapterIndex`、`initialCharOffset`，并递增 `jumpToken`。
+- 离开阅读页后 provider 允许自动销毁；但不能依赖“立即销毁”保证再次进入一定重读数据库。保存进度时必须同步更新 `ReaderState.initialCharOffset`，避免同一轮 App 运行期间复用旧内存状态。
+- `prevChapter()` / `nextChapter()` / 目录 / 搜索 / 书签跳转会更新 `currentChapterIndex`、`initialCharOffset`，递增 `jumpToken`，并立即保存新的章节与偏移。
 - 阅读视图的 `ValueKey` 包含 `jumpToken`，确保“换章 / 跳书签”时强制重建并定位到目标偏移。
-- 普通翻页 / 滚动只保存 `reading_progress`，不强制重建整个阅读页。
+- 普通翻页 / 滚动保存 `reading_progress` 时，同时更新 provider 内存态；若随后返回书架再进入同一本书，即使 provider 尚未释放，也应定位到最新位置。
+- 阅读进度写入通过队列串行化：翻页、跳章、退出页可能连续触发保存，串行化可避免较早的异步写库后完成而覆盖较新的阅读位置。
+
+阅读进度保存时机：
+
+| 场景 | 保存内容 | 说明 |
+|---|---|---|
+| 翻页模式换页 | 当前页起始字符偏移 | `PageView.onPageChanged` 上报 |
+| 滚动模式停止滚动 | 滚动比例映射出的章节内字符偏移 | `ScrollEndNotification` 上报 |
+| 目录 / 上下章 / 书签 / 搜索跳转 | 目标章节 + 目标 offset | 跳转后立即落库，避免返回书架后丢位置 |
+| 点击阅读页返回按钮或系统返回键 | 当前可见页 / 当前滚动位置 | 退出前先保存，再执行 `Navigator.pop()` |
 
 ### 5.4 阅读视图：翻页模式与滚动模式（features/reader/reader_page.dart）
 
@@ -314,6 +326,8 @@ class ReaderSettings {
 
 - 点击正文切换顶 / 底部菜单。
 - 菜单支持上一章、下一章、目录和书签、添加书签、设置、返回。
+- 返回按钮不直接 `pop`，而是先保存当前可见位置；系统返回键通过 `PopScope` 走同一保存逻辑。
+- 目录/书签抽屉关闭只关闭 drawer，不应触发阅读页退出逻辑。
 - 窄屏底部菜单采用等宽 `Expanded` + 图标上文字下布局，避免 5 个按钮横向溢出。
 - 修改字号、行距、主题、阅读模式后，优先使用 `_lastCharOffset` 保留用户当前阅读位置。
 - 发生跳章或书签跳转后清空 `_lastCharOffset`，改用 `ReaderState.initialCharOffset` 精确定位。
@@ -337,6 +351,14 @@ class ReaderSettings {
   4. 输出：List<Page { startCharInChapter, endCharInChapter, content }>
 缓存：当前章节的分页结果。换章节、换字号、换行距、尺寸变化时重算
 ```
+
+阅读页在 `_ReaderShellState` 侧缓存当前章节分页结果，缓存键为：
+
+```text
+chapterIndex | fontSize | lineHeight | contentWidth | contentHeight
+```
+
+主题色、书签列表、菜单显隐等不影响布局的状态不进入缓存键，避免加书签或菜单刷新时重复执行整章 `TextPainter` 分页。
 
 性能预算：单章节（1–3 万字）分页计算 ≤ 100 ms。
 
@@ -376,7 +398,20 @@ LIMIT 100;
    - epub：解析后只把抽取出的纯文本以 utf-8 .txt 写入（原 epub 不落盘）
 3. 数据库 books.file_path 存相对路径（不存绝对路径，避免沙盒迁移失效）
 4. 后续读取时：appDocs + 相对路径 → 绝对路径
+5. `readFullText(relativePath)` 统一负责读取、编码检测、换行归一化；Reader 与 Search 共用，保证章节起止位置、搜索跳转 offset、书签 offset 的坐标一致
 ```
+
+导入失败回滚：
+
+- 导入流程先持久化沙盒文件，再写 `books`，最后批量写 `chapters` 与 FTS5。
+- 若复制/解析/索引任一环节失败，`ImporterService._rollback` 会删除已写入的 `books` 行（级联清章节/进度/书签）与沙盒文件。
+- 回滚自身异常不覆盖真实导入错误；UI 展示原始导入失败原因。
+
+数据库迁移清理：
+
+- 当前升级策略仍是 drop & recreate：旧数据库行全部丢弃。
+- 因旧书记录被丢弃，`onUpgrade` 会调用 `BookStorage.purgeAll()` 清空沙盒 `books/` 目录，避免留下无法被书架引用的旧文件。
+- 若后续改为保留书架数据的精细迁移，需要增加“按 `books.file_path` 白名单清理孤儿文件”的流程。
 
 ### 5.8 主题、设计 token 与动效（shared/theme）
 

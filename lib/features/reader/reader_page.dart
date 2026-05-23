@@ -76,6 +76,8 @@ class _ReaderShell extends ConsumerStatefulWidget {
 class _ReaderShellState extends ConsumerState<_ReaderShell> {
   bool _menuVisible = false;
   bool _didJumpToInitialChapter = false;
+  bool _savingAndPopping = false;
+  bool _allowPopAfterSave = false;
 
   // 章节内最近上报的阅读偏移：翻页/滚动时更新（非响应式，不触发重建）。
   // 切换阅读模式、改字号等导致视图重建时用它保留当前位置；发生跳转后置空。
@@ -170,59 +172,104 @@ class _ReaderShellState extends ConsumerState<_ReaderShell> {
       orElse: () => <int>{},
     );
 
-    return Scaffold(
-      backgroundColor: settings.theme.background,
-      drawer: ReaderDrawer(
-        bookId: widget.bookId,
-        chapters: state.chapters,
-        currentChapterIndex: state.currentChapterIndex,
-        onJump: (i, offset) => ref
-            .read(readerProvider(widget.bookId).notifier)
-            .jumpToChapter(i, charOffset: offset),
-      ),
-      body: SafeArea(
-        child: LayoutBuilder(
-          builder: (context, constraints) {
-            // 公共回调参数（两种模式共用）
-            void tapCenter() => setState(() => _menuVisible = !_menuVisible);
-            void openChapters() => Scaffold.of(context).openDrawer();
-            void openSettings() => Navigator.of(
-              context,
-            ).push(MaterialPageRoute(builder: (_) => const SettingsPage()));
-            void goBack() => Navigator.of(context).pop();
-            final onPrevChapter = state.hasPrev
-                ? () => ref
-                      .read(readerProvider(widget.bookId).notifier)
-                      .prevChapter()
-                : null;
-            final onNextChapter = state.hasNext
-                ? () => ref
-                      .read(readerProvider(widget.bookId).notifier)
-                      .nextChapter()
-                : null;
-            // 记录最近阅读偏移并写库：非响应式更新 _lastCharOffset，
-            // 避免每次翻页都触发 _ReaderShell 重建与重新分页
-            void reportOffset(int offset) {
-              _lastCharOffset = offset;
-              ref
-                  .read(readerProvider(widget.bookId).notifier)
-                  .saveProgress(offset);
-            }
+    return PopScope(
+      // 系统返回键也先保存进度，再真正退出阅读页。
+      canPop: _allowPopAfterSave,
+      onPopInvokedWithResult: (didPop, _) {
+        if (didPop) return;
+        _saveProgressAndPop(_lastCharOffset ?? effectiveOffset);
+      },
+      child: Scaffold(
+        backgroundColor: settings.theme.background,
+        drawer: ReaderDrawer(
+          bookId: widget.bookId,
+          chapters: state.chapters,
+          currentChapterIndex: state.currentChapterIndex,
+          onJump: (i, offset) => ref
+              .read(readerProvider(widget.bookId).notifier)
+              .jumpToChapter(i, charOffset: offset),
+        ),
+        body: SafeArea(
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              // 公共回调参数（两种模式共用）
+              void tapCenter() => setState(() => _menuVisible = !_menuVisible);
+              void openChapters() => Scaffold.of(context).openDrawer();
+              void openSettings() => Navigator.of(
+                context,
+              ).push(MaterialPageRoute(builder: (_) => const SettingsPage()));
+              Future<void> goBack(int charOffset) =>
+                  _saveProgressAndPop(charOffset);
+              final onPrevChapter = state.hasPrev
+                  ? () => ref
+                        .read(readerProvider(widget.bookId).notifier)
+                        .prevChapter()
+                  : null;
+              final onNextChapter = state.hasNext
+                  ? () => ref
+                        .read(readerProvider(widget.bookId).notifier)
+                        .nextChapter()
+                  : null;
+              // 记录最近阅读偏移并写库：非响应式更新 _lastCharOffset，
+              // 避免每次翻页都触发 _ReaderShell 重建与重新分页
+              void reportOffset(int offset) {
+                _lastCharOffset = offset;
+                ref
+                    .read(readerProvider(widget.bookId).notifier)
+                    .saveProgress(offset);
+              }
 
-            // 滚动模式：无需分页计算
-            if (settings.readingMode == ReadingMode.scroll) {
-              return _ScrollView(
+              // 滚动模式：无需分页计算
+              if (settings.readingMode == ReadingMode.scroll) {
+                return _ScrollView(
+                  key: ValueKey(
+                    's-${state.book.id}-${state.currentChapterIndex}-${state.jumpToken}-${settings.fontSize.name}-${settings.lineHeight.name}',
+                  ),
+                  chapterText: state.currentChapterText,
+                  padding: _padding,
+                  textStyle: textStyle,
+                  themeFg: settings.theme.foreground,
+                  chapterTitle: state.currentChapter.title,
+                  menuVisible: _menuVisible,
+                  initialCharOffset: effectiveOffset,
+                  onCharOffsetChanged: reportOffset,
+                  onTapCenter: tapCenter,
+                  onPrevChapter: onPrevChapter,
+                  onNextChapter: onNextChapter,
+                  onOpenChapters: openChapters,
+                  onOpenSettings: openSettings,
+                  onAddBookmark: (charOffset) =>
+                      _addBookmark(state.currentChapterIndex, charOffset),
+                  onBack: goBack,
+                );
+              }
+
+              // 翻页模式：仅此分支需要分页计算
+              final contentWidth = constraints.maxWidth - _padding.horizontal;
+              final contentHeight = constraints.maxHeight - _padding.vertical;
+              final pagination = _paginate(
+                text: state.currentChapterText,
+                style: textStyle,
+                contentWidth: contentWidth,
+                contentHeight: contentHeight,
+                chapterIndex: state.currentChapterIndex,
+                fontSizeName: settings.fontSize.name,
+                lineHeightName: settings.lineHeight.name,
+              );
+              return _PaginatedView(
                 key: ValueKey(
-                  's-${state.book.id}-${state.currentChapterIndex}-${state.jumpToken}-${settings.fontSize.name}-${settings.lineHeight.name}',
+                  'p-${state.book.id}-${state.currentChapterIndex}-${state.jumpToken}-${settings.fontSize.name}-${settings.lineHeight.name}-${constraints.maxWidth.toInt()}x${constraints.maxHeight.toInt()}',
                 ),
-                chapterText: state.currentChapterText,
+                pagination: pagination,
                 padding: _padding,
                 textStyle: textStyle,
                 themeFg: settings.theme.foreground,
                 chapterTitle: state.currentChapter.title,
                 menuVisible: _menuVisible,
-                initialCharOffset: effectiveOffset,
-                onCharOffsetChanged: reportOffset,
+                chapterBookmarkOffsets: chapterBookmarkOffsets,
+                initialPage: pagination.pageOfOffset(effectiveOffset),
+                onPageChanged: (pageIndex) =>
+                    reportOffset(pagination.offsetOfPage(pageIndex)),
                 onTapCenter: tapCenter,
                 onPrevChapter: onPrevChapter,
                 onNextChapter: onNextChapter,
@@ -232,47 +279,29 @@ class _ReaderShellState extends ConsumerState<_ReaderShell> {
                     _addBookmark(state.currentChapterIndex, charOffset),
                 onBack: goBack,
               );
-            }
-
-            // 翻页模式：仅此分支需要分页计算
-            final contentWidth = constraints.maxWidth - _padding.horizontal;
-            final contentHeight = constraints.maxHeight - _padding.vertical;
-            final pagination = _paginate(
-              text: state.currentChapterText,
-              style: textStyle,
-              contentWidth: contentWidth,
-              contentHeight: contentHeight,
-              chapterIndex: state.currentChapterIndex,
-              fontSizeName: settings.fontSize.name,
-              lineHeightName: settings.lineHeight.name,
-            );
-            return _PaginatedView(
-              key: ValueKey(
-                'p-${state.book.id}-${state.currentChapterIndex}-${state.jumpToken}-${settings.fontSize.name}-${settings.lineHeight.name}-${constraints.maxWidth.toInt()}x${constraints.maxHeight.toInt()}',
-              ),
-              pagination: pagination,
-              padding: _padding,
-              textStyle: textStyle,
-              themeFg: settings.theme.foreground,
-              chapterTitle: state.currentChapter.title,
-              menuVisible: _menuVisible,
-              chapterBookmarkOffsets: chapterBookmarkOffsets,
-              initialPage: pagination.pageOfOffset(effectiveOffset),
-              onPageChanged: (pageIndex) =>
-                  reportOffset(pagination.offsetOfPage(pageIndex)),
-              onTapCenter: tapCenter,
-              onPrevChapter: onPrevChapter,
-              onNextChapter: onNextChapter,
-              onOpenChapters: openChapters,
-              onOpenSettings: openSettings,
-              onAddBookmark: (charOffset) =>
-                  _addBookmark(state.currentChapterIndex, charOffset),
-              onBack: goBack,
-            );
-          },
+            },
+          ),
         ),
       ),
     );
+  }
+
+  // 退出阅读页前保存"当前可见位置"。
+  // 仅依赖章节内偏移，不关心具体阅读模式，便于翻页 / 滚动模式共用。
+  Future<void> _saveProgressAndPop(int charOffset) async {
+    if (_savingAndPopping) return;
+    _savingAndPopping = true;
+    _lastCharOffset = charOffset;
+    try {
+      await ref
+          .read(readerProvider(widget.bookId).notifier)
+          .saveProgress(charOffset);
+    } catch (_) {
+      // 保存失败不阻断返回：下次翻页/跳转仍会继续尝试写入进度。
+    }
+    if (!mounted) return;
+    setState(() => _allowPopAfterSave = true);
+    Navigator.of(context).pop();
   }
 
   // 弹对话框输入备注（可留空），保存后自动收起菜单回到阅读
@@ -364,7 +393,7 @@ class _PaginatedView extends StatefulWidget {
   final VoidCallback onOpenSettings;
   // 加书签：传入当前页起始的章节内偏移
   final void Function(int charOffset) onAddBookmark;
-  final VoidCallback onBack;
+  final Future<void> Function(int charOffset) onBack;
 
   const _PaginatedView({
     super.key,
@@ -489,7 +518,9 @@ class _PaginatedViewState extends State<_PaginatedView> {
                 children: [
                   IconButton(
                     icon: const Icon(Icons.arrow_back, color: Colors.white),
-                    onPressed: widget.onBack,
+                    onPressed: () => widget.onBack(
+                      widget.pagination.offsetOfPage(_currentPage),
+                    ),
                   ),
                   Expanded(
                     child: Text(
@@ -635,7 +666,7 @@ class _ScrollView extends StatefulWidget {
   final VoidCallback onOpenChapters;
   final VoidCallback onOpenSettings;
   final void Function(int charOffset) onAddBookmark;
-  final VoidCallback onBack;
+  final Future<void> Function(int charOffset) onBack;
 
   const _ScrollView({
     super.key,
@@ -744,7 +775,7 @@ class _ScrollViewState extends State<_ScrollView> {
                 children: [
                   IconButton(
                     icon: const Icon(Icons.arrow_back, color: Colors.white),
-                    onPressed: widget.onBack,
+                    onPressed: () => widget.onBack(_currentCharOffset),
                   ),
                   Expanded(
                     child: Text(

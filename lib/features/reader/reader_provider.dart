@@ -53,6 +53,10 @@ class ReaderNotifier extends AutoDisposeFamilyAsyncNotifier<ReaderState, int> {
   // 全文缓存：避免每次切章重新读盘解码
   String? _fullText;
 
+  // 阅读进度写入队列：翻页、跳章、退出阅读页可能连续触发保存。
+  // 串行化写库可避免较早的异步 save 后完成，反向覆盖较新的阅读位置。
+  Future<void> _progressSaveQueue = Future.value();
+
   @override
   Future<ReaderState> build(int bookId) async {
     final book = await _bookDao.findById(bookId);
@@ -64,8 +68,10 @@ class ReaderNotifier extends AutoDisposeFamilyAsyncNotifier<ReaderState, int> {
       throw StateError('Book has no chapter data: id=$bookId');
     }
     final progress = await _progressDao.get(bookId);
-    final initialIndex = (progress?.chapterIndex ?? 0)
-        .clamp(0, chapters.length - 1);
+    final initialIndex = (progress?.chapterIndex ?? 0).clamp(
+      0,
+      chapters.length - 1,
+    );
 
     await _ensureFullText(book);
     final text = _sliceChapter(chapters[initialIndex]);
@@ -89,12 +95,17 @@ class ReaderNotifier extends AutoDisposeFamilyAsyncNotifier<ReaderState, int> {
     final clamped = chapterIndex.clamp(0, cur.chapters.length - 1);
     await _ensureFullText(cur.book);
     final text = _sliceChapter(cur.chapters[clamped]);
-    state = AsyncData(cur.copyWith(
-      currentChapterIndex: clamped,
-      currentChapterText: text,
-      initialCharOffset: charOffset,
-      jumpToken: cur.jumpToken + 1, // 自增以强制阅读视图按新位置重建
-    ));
+    state = AsyncData(
+      cur.copyWith(
+        currentChapterIndex: clamped,
+        currentChapterText: text,
+        initialCharOffset: charOffset,
+        jumpToken: cur.jumpToken + 1, // 自增以强制阅读视图按新位置重建
+      ),
+    );
+    // 跳目录 / 书签 / 搜索结果 / 上下章后，立即把新位置作为阅读进度落库。
+    // 否则返回书架再打开，会回到跳转前的位置。
+    await _saveProgressFor(cur.book.id, clamped, charOffset);
   }
 
   Future<void> nextChapter() async {
@@ -115,12 +126,37 @@ class ReaderNotifier extends AutoDisposeFamilyAsyncNotifier<ReaderState, int> {
   Future<void> saveProgress(int charOffsetInChapter) async {
     final cur = state.value;
     if (cur == null) return;
-    await _progressDao.save(ReadingProgress(
-      bookId: cur.book.id,
-      chapterIndex: cur.currentChapterIndex,
+    final clampedOffset = charOffsetInChapter.clamp(
+      0,
+      cur.currentChapterText.length,
+    );
+
+    // 同步更新内存态：如果阅读页返回后 readerProvider 尚未被 autoDispose 销毁，
+    // 再次打开同一本书会复用当前 ReaderState。只写数据库会导致"重启 App 才生效"。
+    if (cur.initialCharOffset != clampedOffset) {
+      state = AsyncData(cur.copyWith(initialCharOffset: clampedOffset));
+    }
+
+    await _saveProgressFor(cur.book.id, cur.currentChapterIndex, clampedOffset);
+  }
+
+  // 串行保存指定位置，确保调用顺序就是数据库最终顺序。
+  Future<void> _saveProgressFor(
+    int bookId,
+    int chapterIndex,
+    int charOffsetInChapter,
+  ) {
+    final progress = ReadingProgress(
+      bookId: bookId,
+      chapterIndex: chapterIndex,
       charOffset: charOffsetInChapter,
       updatedAt: DateTime.now(),
-    ));
+    );
+    final save = _progressSaveQueue.then((_) => _progressDao.save(progress));
+    // 队列本身吞掉异常，避免一次失败导致后续进度保存都被短路；
+    // 当前调用仍返回原始 Future，让调用方可感知失败。
+    _progressSaveQueue = save.catchError((_) {});
+    return save;
   }
 
   // 读全文（带缓存）
@@ -140,7 +176,5 @@ class ReaderNotifier extends AutoDisposeFamilyAsyncNotifier<ReaderState, int> {
 
 // autoDispose：退出阅读页后销毁 provider，
 // 重新进入时 build() 会重新从数据库读取阅读进度，确保定位到上次位置
-final readerProvider =
-    AsyncNotifierProvider.autoDispose.family<ReaderNotifier, ReaderState, int>(
-  ReaderNotifier.new,
-);
+final readerProvider = AsyncNotifierProvider.autoDispose
+    .family<ReaderNotifier, ReaderState, int>(ReaderNotifier.new);
