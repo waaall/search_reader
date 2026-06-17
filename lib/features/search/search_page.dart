@@ -6,7 +6,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/db/daos.dart';
 import '../../shared/l10n/app_l10n.dart';
+import '../../shared/navigation/app_routes.dart';
 import '../../shared/theme/app_tokens.dart';
+import '../../shared/widgets/app_animated_switcher.dart';
 import '../reader/reader_page.dart';
 import 'search_service.dart';
 
@@ -45,6 +47,7 @@ class _SearchPageState extends ConsumerState<SearchPage> {
     if (text.trim().isEmpty) {
       setState(() {
         _hits = const [];
+        _loading = false;
         _error = null;
       });
       return;
@@ -84,19 +87,26 @@ class _SearchPageState extends ConsumerState<SearchPage> {
           onChanged: _onChanged,
         ),
       ),
-      body: _buildBody(),
+      body: AppAnimatedSwitcher(child: _buildBody()),
     );
   }
 
   Widget _buildBody() {
     if (_loading) {
-      return const Center(child: CircularProgressIndicator());
+      return const Center(
+        key: ValueKey('search-loading'),
+        child: CircularProgressIndicator(),
+      );
     }
     if (_error != null) {
-      return Center(child: Text(context.l10n.searchFailed(_error!)));
+      return Center(
+        key: const ValueKey('search-error'),
+        child: Text(context.l10n.searchFailed(_error!)),
+      );
     }
     if (_controller.text.isEmpty) {
       return Center(
+        key: const ValueKey('search-empty'),
         child: Text(
           context.l10n.searchEmptyHint,
           style: TextStyle(color: Colors.grey),
@@ -104,13 +114,19 @@ class _SearchPageState extends ConsumerState<SearchPage> {
       );
     }
     if (_hits.isEmpty) {
-      return Center(child: Text(context.l10n.noSearchResults));
+      return Center(
+        key: const ValueKey('search-no-results'),
+        child: Text(context.l10n.noSearchResults),
+      );
     }
     return ListView.separated(
+      key: ValueKey('search-results-${_hits.length}-${_controller.text}'),
       itemCount: _hits.length,
       separatorBuilder: (_, _) => const Divider(height: 1),
-      itemBuilder: (_, i) =>
-          _HitTile(hit: _hits[i]).animate().fadeIn(duration: AppMotion.fast),
+      itemBuilder: (_, i) => _HitTile(hit: _hits[i])
+          .animate(delay: (i < 8 ? 24 * i : 0).ms)
+          .fadeIn(duration: AppMotion.fast)
+          .slideY(begin: 0.04, end: 0, duration: AppMotion.fast),
     );
   }
 }
@@ -129,8 +145,8 @@ class _HitTile extends StatelessWidget {
       ),
       subtitle: _SnippetText(snippet: hit.snippet),
       onTap: () => Navigator.of(context).push(
-        MaterialPageRoute(
-          builder: (_) => ReaderPage(
+        appRoute(
+          (_) => ReaderPage(
             bookId: hit.bookId,
             initialChapterIndex: hit.chapterIndex,
             initialCharOffset: hit.charOffset,

@@ -3,6 +3,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../domain/reader_settings.dart';
 import '../../shared/l10n/app_l10n.dart';
+import '../../shared/navigation/app_routes.dart';
+import '../../shared/theme/app_tokens.dart';
 import '../library/library_provider.dart';
 import '../settings/settings_page.dart';
 import '../settings/settings_provider.dart';
@@ -197,7 +199,7 @@ class _ReaderShellState extends ConsumerState<_ReaderShell> {
               void openChapters() => Scaffold.of(context).openDrawer();
               void openSettings() => Navigator.of(
                 context,
-              ).push(MaterialPageRoute(builder: (_) => const SettingsPage()));
+              ).push(appRoute((_) => const SettingsPage()));
               Future<void> goBack(int charOffset) =>
                   _saveProgressAndPop(charOffset);
               final onPrevChapter = state.hasPrev
@@ -437,9 +439,18 @@ class _PaginatedViewState extends State<_PaginatedView> {
     super.dispose();
   }
 
+  Future<void> _animateToPage(int page) async {
+    if (!_ctrl.hasClients) return;
+    await _ctrl.animateToPage(
+      page,
+      duration: AppMotion.normal,
+      curve: AppMotion.easeOut,
+    );
+  }
+
   void _goPrev() {
     if (_currentPage > 0) {
-      _ctrl.jumpToPage(_currentPage - 1);
+      _animateToPage(_currentPage - 1);
     } else if (widget.onPrevChapter != null) {
       widget.onPrevChapter!();
     }
@@ -447,7 +458,7 @@ class _PaginatedViewState extends State<_PaginatedView> {
 
   void _goNext() {
     if (_currentPage < widget.pagination.pageCount - 1) {
-      _ctrl.jumpToPage(_currentPage + 1);
+      _animateToPage(_currentPage + 1);
     } else if (widget.onNextChapter != null) {
       widget.onNextChapter!();
     }
@@ -458,7 +469,7 @@ class _PaginatedViewState extends State<_PaginatedView> {
     final l10n = context.l10n;
     return Stack(
       children: [
-        // 文本页：PageView 切换，无动画
+        // 文本页：点击左右区域时用短距离页面动画，保持纸书翻页感但不过度拟物
         PageView.builder(
           controller: _ctrl,
           physics: const NeverScrollableScrollPhysics(),
@@ -505,35 +516,18 @@ class _PaginatedViewState extends State<_PaginatedView> {
                   ],
                 ),
         ),
-        // 顶部章节标题（菜单可见时显示）
-        if (widget.menuVisible)
-          Positioned(
-            top: 0,
-            left: 0,
-            right: 0,
-            child: Container(
-              color: Colors.black.withValues(alpha: 0.5),
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-              child: Row(
-                children: [
-                  IconButton(
-                    icon: const Icon(Icons.arrow_back, color: Colors.white),
-                    onPressed: () => widget.onBack(
-                      widget.pagination.offsetOfPage(_currentPage),
-                    ),
-                  ),
-                  Expanded(
-                    child: Text(
-                      widget.chapterTitle,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(color: Colors.white),
-                    ),
-                  ),
-                ],
-              ),
-            ),
+        // 顶部章节标题：显示/隐藏时用滑入淡入，减少菜单突兀感
+        Positioned(
+          top: 0,
+          left: 0,
+          right: 0,
+          child: _ReaderTopBar(
+            visible: widget.menuVisible,
+            title: widget.chapterTitle,
+            onBack: () =>
+                widget.onBack(widget.pagination.offsetOfPage(_currentPage)),
           ),
+        ),
         // 底部页码（始终显示，淡灰色不打扰）
         Positioned(
           bottom: 8,
@@ -551,59 +545,52 @@ class _PaginatedViewState extends State<_PaginatedView> {
         ),
         // 右上角书签标记：仅当前页范围内含书签时显示
         // 菜单显示时让位给顶部栏，避免重叠
-        if (!widget.menuVisible && _currentPageHasBookmark())
-          Positioned(
-            top: 8,
-            right: 8,
-            child: Icon(
-              Icons.bookmark,
-              size: 20,
-              color: widget.themeFg.withValues(alpha: 0.6),
+        Positioned(
+          top: AppSpacing.sm,
+          right: AppSpacing.sm,
+          child: AnimatedSwitcher(
+            duration: AppMotion.fast,
+            switchInCurve: AppMotion.easeOut,
+            switchOutCurve: AppMotion.easeInOut,
+            transitionBuilder: (child, animation) => FadeTransition(
+              opacity: animation,
+              child: ScaleTransition(scale: animation, child: child),
             ),
+            child: !widget.menuVisible && _currentPageHasBookmark()
+                ? Icon(
+                    Icons.bookmark,
+                    key: const ValueKey('bookmark-visible'),
+                    size: 20,
+                    color: widget.themeFg.withValues(alpha: 0.6),
+                  )
+                : const SizedBox(
+                    key: ValueKey('bookmark-hidden'),
+                    width: 20,
+                    height: 20,
+                  ),
           ),
-        // 底部菜单（菜单可见时显示）
-        if (widget.menuVisible)
-          Positioned(
-            bottom: 0,
-            left: 0,
-            right: 0,
-            child: Container(
-              color: Colors.black.withValues(alpha: 0.7),
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceAround,
-                children: [
-                  _menuButton(
-                    Icons.skip_previous,
-                    l10n.previousChapter,
-                    onTap: widget.onPrevChapter,
-                  ),
-                  _menuButton(
-                    Icons.skip_next,
-                    l10n.nextChapter,
-                    onTap: widget.onNextChapter,
-                  ),
-                  _menuButton(
-                    Icons.list,
-                    l10n.contentsAndBookmarks,
-                    onTap: widget.onOpenChapters,
-                  ),
-                  _menuButton(
-                    Icons.bookmark_add_outlined,
-                    l10n.addBookmark,
-                    onTap: () => widget.onAddBookmark(
-                      widget.pagination.offsetOfPage(_currentPage),
-                    ),
-                  ),
-                  _menuButton(
-                    Icons.text_fields,
-                    l10n.commonSettings,
-                    onTap: widget.onOpenSettings,
-                  ),
-                ],
-              ),
+        ),
+        // 底部菜单：保留固定位置，只让内容做淡入滑动，避免布局跳变
+        Positioned(
+          bottom: 0,
+          left: 0,
+          right: 0,
+          child: _ReaderBottomBar(
+            visible: widget.menuVisible,
+            previousLabel: l10n.previousChapter,
+            nextLabel: l10n.nextChapter,
+            contentsLabel: l10n.contentsAndBookmarks,
+            bookmarkLabel: l10n.addBookmark,
+            settingsLabel: l10n.commonSettings,
+            onPrevChapter: widget.onPrevChapter,
+            onNextChapter: widget.onNextChapter,
+            onOpenChapters: widget.onOpenChapters,
+            onAddBookmark: () => widget.onAddBookmark(
+              widget.pagination.offsetOfPage(_currentPage),
             ),
+            onOpenSettings: widget.onOpenSettings,
           ),
+        ),
       ],
     );
   }
@@ -618,16 +605,178 @@ class _PaginatedViewState extends State<_PaginatedView> {
     }
     return false;
   }
+}
 
-  Widget _menuButton(IconData icon, String label, {VoidCallback? onTap}) {
+// 阅读页菜单顶部栏：只负责展示章节标题与返回按钮，动效由组件内部统一处理。
+class _ReaderTopBar extends StatelessWidget {
+  final bool visible;
+  final String title;
+  final VoidCallback onBack;
+
+  const _ReaderTopBar({
+    required this.visible,
+    required this.title,
+    required this.onBack,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return IgnorePointer(
+      ignoring: !visible,
+      child: AnimatedSlide(
+        offset: visible ? Offset.zero : const Offset(0, -1),
+        duration: AppMotion.normal,
+        curve: AppMotion.easeOut,
+        child: AnimatedOpacity(
+          opacity: visible ? 1 : 0,
+          duration: AppMotion.fast,
+          curve: AppMotion.easeOut,
+          child: DecoratedBox(
+            decoration: BoxDecoration(
+              color: Colors.black.withValues(alpha: 0.52),
+            ),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(
+                horizontal: AppSpacing.md,
+                vertical: AppSpacing.sm + AppSpacing.xs,
+              ),
+              child: Row(
+                children: [
+                  IconButton(
+                    icon: const Icon(Icons.arrow_back, color: Colors.white),
+                    onPressed: onBack,
+                  ),
+                  Expanded(
+                    child: Text(
+                      title,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(color: Colors.white),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// 阅读页底部操作栏：翻页模式和滚动模式共用，避免两套菜单动效不一致。
+class _ReaderBottomBar extends StatelessWidget {
+  final bool visible;
+  final String previousLabel;
+  final String nextLabel;
+  final String contentsLabel;
+  final String bookmarkLabel;
+  final String settingsLabel;
+  final VoidCallback? onPrevChapter;
+  final VoidCallback? onNextChapter;
+  final VoidCallback onOpenChapters;
+  final VoidCallback onAddBookmark;
+  final VoidCallback onOpenSettings;
+
+  const _ReaderBottomBar({
+    required this.visible,
+    required this.previousLabel,
+    required this.nextLabel,
+    required this.contentsLabel,
+    required this.bookmarkLabel,
+    required this.settingsLabel,
+    required this.onPrevChapter,
+    required this.onNextChapter,
+    required this.onOpenChapters,
+    required this.onAddBookmark,
+    required this.onOpenSettings,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return IgnorePointer(
+      ignoring: !visible,
+      child: AnimatedSlide(
+        offset: visible ? Offset.zero : const Offset(0, 1),
+        duration: AppMotion.normal,
+        curve: AppMotion.easeOut,
+        child: AnimatedOpacity(
+          opacity: visible ? 1 : 0,
+          duration: AppMotion.fast,
+          curve: AppMotion.easeOut,
+          child: DecoratedBox(
+            decoration: BoxDecoration(
+              color: Colors.black.withValues(alpha: 0.72),
+            ),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(
+                horizontal: AppSpacing.sm,
+                vertical: AppSpacing.sm,
+              ),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceAround,
+                children: [
+                  _ReaderMenuButton(
+                    icon: Icons.skip_previous,
+                    label: previousLabel,
+                    onTap: onPrevChapter,
+                  ),
+                  _ReaderMenuButton(
+                    icon: Icons.skip_next,
+                    label: nextLabel,
+                    onTap: onNextChapter,
+                  ),
+                  _ReaderMenuButton(
+                    icon: Icons.list,
+                    label: contentsLabel,
+                    onTap: onOpenChapters,
+                  ),
+                  _ReaderMenuButton(
+                    icon: Icons.bookmark_add_outlined,
+                    label: bookmarkLabel,
+                    onTap: onAddBookmark,
+                  ),
+                  _ReaderMenuButton(
+                    icon: Icons.text_fields,
+                    label: settingsLabel,
+                    onTap: onOpenSettings,
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _ReaderMenuButton extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final VoidCallback? onTap;
+
+  const _ReaderMenuButton({
+    required this.icon,
+    required this.label,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
     final disabled = onTap == null;
-    final color = disabled ? Colors.grey : Colors.white;
+    final color = disabled
+        ? Colors.white.withValues(alpha: 0.36)
+        : Colors.white.withValues(alpha: 0.96);
     // 等宽分配 + 图标在上文字在下：窄屏（手机）下 5 个按钮也能完整显示
     return Expanded(
       child: TextButton(
         onPressed: onTap,
         style: TextButton.styleFrom(
-          padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 4),
+          padding: const EdgeInsets.symmetric(
+            vertical: AppSpacing.sm - 2,
+            horizontal: AppSpacing.xs,
+          ),
           minimumSize: Size.zero,
           tapTargetSize: MaterialTapTargetSize.shrinkWrap,
         ),
@@ -635,7 +784,7 @@ class _PaginatedViewState extends State<_PaginatedView> {
           mainAxisSize: MainAxisSize.min,
           children: [
             Icon(icon, color: color, size: 22),
-            const SizedBox(height: 4),
+            const SizedBox(height: AppSpacing.xs),
             Text(
               label,
               maxLines: 1,
@@ -762,33 +911,17 @@ class _ScrollViewState extends State<_ScrollView> {
             onTap: widget.onTapCenter,
           ),
         ),
-        // 顶部章节标题（菜单可见时显示）
-        if (widget.menuVisible)
-          Positioned(
-            top: 0,
-            left: 0,
-            right: 0,
-            child: Container(
-              color: Colors.black.withValues(alpha: 0.5),
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-              child: Row(
-                children: [
-                  IconButton(
-                    icon: const Icon(Icons.arrow_back, color: Colors.white),
-                    onPressed: () => widget.onBack(_currentCharOffset),
-                  ),
-                  Expanded(
-                    child: Text(
-                      widget.chapterTitle,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(color: Colors.white),
-                    ),
-                  ),
-                ],
-              ),
-            ),
+        // 顶部章节标题：滚动阅读与翻页阅读保持同一套菜单动效
+        Positioned(
+          top: 0,
+          left: 0,
+          right: 0,
+          child: _ReaderTopBar(
+            visible: widget.menuVisible,
+            title: widget.chapterTitle,
+            onBack: () => widget.onBack(_currentCharOffset),
           ),
+        ),
         // 底部阅读进度百分比：仅此小部件随滚动刷新
         Positioned(
           bottom: 8,
@@ -807,77 +940,26 @@ class _ScrollViewState extends State<_ScrollView> {
             ),
           ),
         ),
-        // 底部菜单（菜单可见时显示）
-        if (widget.menuVisible)
-          Positioned(
-            bottom: 0,
-            left: 0,
-            right: 0,
-            child: Container(
-              color: Colors.black.withValues(alpha: 0.7),
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceAround,
-                children: [
-                  _menuBtn(
-                    Icons.skip_previous,
-                    l10n.previousChapter,
-                    onTap: widget.onPrevChapter,
-                  ),
-                  _menuBtn(
-                    Icons.skip_next,
-                    l10n.nextChapter,
-                    onTap: widget.onNextChapter,
-                  ),
-                  _menuBtn(
-                    Icons.list,
-                    l10n.contentsAndBookmarks,
-                    onTap: widget.onOpenChapters,
-                  ),
-                  _menuBtn(
-                    Icons.bookmark_add_outlined,
-                    l10n.addBookmark,
-                    onTap: () => widget.onAddBookmark(_currentCharOffset),
-                  ),
-                  _menuBtn(
-                    Icons.text_fields,
-                    l10n.commonSettings,
-                    onTap: widget.onOpenSettings,
-                  ),
-                ],
-              ),
-            ),
+        // 底部菜单：保留固定位置，只让内容做淡入滑动，避免布局跳变
+        Positioned(
+          bottom: 0,
+          left: 0,
+          right: 0,
+          child: _ReaderBottomBar(
+            visible: widget.menuVisible,
+            previousLabel: l10n.previousChapter,
+            nextLabel: l10n.nextChapter,
+            contentsLabel: l10n.contentsAndBookmarks,
+            bookmarkLabel: l10n.addBookmark,
+            settingsLabel: l10n.commonSettings,
+            onPrevChapter: widget.onPrevChapter,
+            onNextChapter: widget.onNextChapter,
+            onOpenChapters: widget.onOpenChapters,
+            onAddBookmark: () => widget.onAddBookmark(_currentCharOffset),
+            onOpenSettings: widget.onOpenSettings,
           ),
+        ),
       ],
-    );
-  }
-
-  Widget _menuBtn(IconData icon, String label, {VoidCallback? onTap}) {
-    final disabled = onTap == null;
-    final color = disabled ? Colors.grey : Colors.white;
-    // 等宽分配 + 图标在上文字在下：窄屏（手机）下 5 个按钮也能完整显示
-    return Expanded(
-      child: TextButton(
-        onPressed: onTap,
-        style: TextButton.styleFrom(
-          padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 4),
-          minimumSize: Size.zero,
-          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-        ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(icon, color: color, size: 22),
-            const SizedBox(height: 4),
-            Text(
-              label,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: TextStyle(color: color, fontSize: 11),
-            ),
-          ],
-        ),
-      ),
     );
   }
 }

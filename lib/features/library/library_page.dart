@@ -5,7 +5,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../domain/book.dart';
 import '../../shared/l10n/app_formatters.dart';
 import '../../shared/l10n/app_l10n.dart';
+import '../../shared/navigation/app_routes.dart';
 import '../../shared/theme/app_tokens.dart';
+import '../../shared/widgets/app_animated_switcher.dart';
 import '../bookmarks/all_bookmarks_page.dart';
 import '../reader/reader_page.dart';
 import '../search/search_page.dart';
@@ -35,20 +37,38 @@ class LibraryPage extends ConsumerWidget {
         appBar: selectionMode
             ? _SelectionAppBar(selectedCount: selectedCount)
             : _NormalAppBar(),
-        body: asyncState.when(
-          loading: () => const Center(child: CircularProgressIndicator()),
-          error: (e, _) =>
-              Center(child: Text(context.l10n.loadLibraryFailed(e))),
-          data: (state) => _Body(state: state),
+        body: AppAnimatedSwitcher(
+          child: asyncState.when(
+            loading: () => const Center(
+              key: ValueKey('library-loading'),
+              child: CircularProgressIndicator(),
+            ),
+            error: (e, _) => Center(
+              key: const ValueKey('library-error'),
+              child: Text(context.l10n.loadLibraryFailed(e)),
+            ),
+            data: (state) =>
+                _Body(key: const ValueKey('library-content'), state: state),
+          ),
         ),
-        floatingActionButton: selectionMode
-            ? null
-            : FloatingActionButton.extended(
-                icon: const Icon(Icons.add),
-                label: Text(context.l10n.importBooks),
-                onPressed: () =>
-                    ref.read(libraryProvider.notifier).pickAndImport(),
-              ),
+        floatingActionButton: AnimatedSwitcher(
+          duration: AppMotion.fast,
+          switchInCurve: AppMotion.easeOut,
+          switchOutCurve: AppMotion.easeInOut,
+          transitionBuilder: (child, animation) => FadeTransition(
+            opacity: animation,
+            child: ScaleTransition(scale: animation, child: child),
+          ),
+          child: selectionMode
+              ? const SizedBox.shrink(key: ValueKey('import-fab-hidden'))
+              : FloatingActionButton.extended(
+                  key: const ValueKey('import-fab'),
+                  icon: const Icon(Icons.add),
+                  label: Text(context.l10n.importBooks),
+                  onPressed: () =>
+                      ref.read(libraryProvider.notifier).pickAndImport(),
+                ),
+        ),
       ),
     );
   }
@@ -67,23 +87,21 @@ class _NormalAppBar extends StatelessWidget implements PreferredSizeWidget {
         IconButton(
           tooltip: context.l10n.commonSearch,
           icon: const Icon(Icons.search),
-          onPressed: () => Navigator.of(
-            context,
-          ).push(MaterialPageRoute(builder: (_) => const SearchPage())),
+          onPressed: () =>
+              Navigator.of(context).push(appRoute((_) => const SearchPage())),
         ),
         IconButton(
           tooltip: context.l10n.bookmarksTitle,
           icon: const Icon(Icons.bookmark_outline),
           onPressed: () => Navigator.of(
             context,
-          ).push(MaterialPageRoute(builder: (_) => const AllBookmarksPage())),
+          ).push(appRoute((_) => const AllBookmarksPage())),
         ),
         IconButton(
           tooltip: context.l10n.commonSettings,
           icon: const Icon(Icons.settings),
-          onPressed: () => Navigator.of(
-            context,
-          ).push(MaterialPageRoute(builder: (_) => const SettingsPage())),
+          onPressed: () =>
+              Navigator.of(context).push(appRoute((_) => const SettingsPage())),
         ),
       ],
     );
@@ -155,7 +173,7 @@ class _SelectionAppBar extends ConsumerWidget implements PreferredSizeWidget {
 
 class _Body extends ConsumerWidget {
   final LibraryState state;
-  const _Body({required this.state});
+  const _Body({super.key, required this.state});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -172,7 +190,7 @@ class _Body extends ConsumerWidget {
               96,
             ),
             itemCount: state.books.length,
-            separatorBuilder: (_, _) => const Divider(height: 1),
+            separatorBuilder: (_, _) => const SizedBox(height: AppSpacing.sm),
             itemBuilder: (context, i) {
               final book = state.books[i];
               return _BookTile(
@@ -305,52 +323,97 @@ class _BookTile extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final notifier = ref.read(libraryProvider.notifier);
-    return ListTile(
-      // 多选模式下用 Checkbox 替代图标，直观显示选中态
-      leading: selectionMode
-          ? Checkbox(
-              value: selected,
-              onChanged: (_) => notifier.toggleSelect(book.id),
-            )
-          : const Icon(Icons.menu_book, size: 32),
-      title: Text(book.title, maxLines: 1, overflow: TextOverflow.ellipsis),
-      subtitle: Text(
-        '${AppFormatters.characterCount(context, book.totalChars)}  ·  '
-        '${book.lastReadAt == null ? context.l10n.unread : context.l10n.lastReadAt(AppFormatters.relativeTime(context, book.lastReadAt!))}',
+    final colorScheme = Theme.of(context).colorScheme;
+    final background = selected
+        ? colorScheme.primaryContainer.withValues(alpha: 0.55)
+        : colorScheme.surfaceContainerLow.withValues(alpha: 0.72);
+    final borderColor = selected
+        ? colorScheme.primary.withValues(alpha: 0.38)
+        : colorScheme.outlineVariant.withValues(alpha: 0.32);
+
+    return AnimatedContainer(
+      duration: AppMotion.fast,
+      curve: AppMotion.easeOut,
+      clipBehavior: Clip.antiAlias,
+      decoration: BoxDecoration(
+        color: background,
+        borderRadius: BorderRadius.circular(AppRadius.md),
+        border: Border.all(color: borderColor),
       ),
-      // 多选模式下隐藏单本菜单，避免操作冲突
-      trailing: selectionMode
-          ? null
-          : PopupMenuButton<String>(
-              itemBuilder: (_) => [
-                PopupMenuItem(
-                  value: 'delete',
-                  child: Text(context.l10n.commonDelete),
-                ),
-              ],
-              onSelected: (v) async {
-                if (v == 'delete') {
-                  final confirmed = await _confirmDelete(context, book.title);
-                  if (confirmed && context.mounted) {
-                    await notifier.deleteBook(book);
-                  }
-                }
-              },
+      child: Material(
+        color: Colors.transparent,
+        child: ListTile(
+          contentPadding: const EdgeInsets.symmetric(
+            horizontal: AppSpacing.md,
+            vertical: AppSpacing.xs,
+          ),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(AppRadius.md),
+          ),
+          // 多选模式下用 Checkbox 替代图标，直观显示选中态；切换时做轻量淡入缩放
+          leading: AnimatedSwitcher(
+            duration: AppMotion.fast,
+            switchInCurve: AppMotion.easeOut,
+            switchOutCurve: AppMotion.easeInOut,
+            transitionBuilder: (child, animation) => FadeTransition(
+              opacity: animation,
+              child: ScaleTransition(scale: animation, child: child),
             ),
-      onTap: () {
-        if (selectionMode) {
-          notifier.toggleSelect(book.id);
-        } else {
-          Navigator.of(context).push(
-            MaterialPageRoute(builder: (_) => ReaderPage(bookId: book.id)),
-          );
-        }
-      },
-      // 长按进入多选模式（普通模式下）；已在多选模式则忽略
-      onLongPress: selectionMode
-          ? null
-          : () => notifier.enterSelection(book.id),
-      selected: selected,
+            child: selectionMode
+                ? Checkbox(
+                    key: const ValueKey('book-checkbox'),
+                    value: selected,
+                    onChanged: (_) => notifier.toggleSelect(book.id),
+                  )
+                : const Icon(
+                    Icons.menu_book,
+                    key: ValueKey('book-icon'),
+                    size: 32,
+                  ),
+          ),
+          title: Text(book.title, maxLines: 1, overflow: TextOverflow.ellipsis),
+          subtitle: Text(
+            '${AppFormatters.characterCount(context, book.totalChars)}  ·  '
+            '${book.lastReadAt == null ? context.l10n.unread : context.l10n.lastReadAt(AppFormatters.relativeTime(context, book.lastReadAt!))}',
+          ),
+          // 多选模式下隐藏单本菜单，避免操作冲突
+          trailing: selectionMode
+              ? null
+              : PopupMenuButton<String>(
+                  itemBuilder: (_) => [
+                    PopupMenuItem(
+                      value: 'delete',
+                      child: Text(context.l10n.commonDelete),
+                    ),
+                  ],
+                  onSelected: (v) async {
+                    if (v == 'delete') {
+                      final confirmed = await _confirmDelete(
+                        context,
+                        book.title,
+                      );
+                      if (confirmed && context.mounted) {
+                        await notifier.deleteBook(book);
+                      }
+                    }
+                  },
+                ),
+          onTap: () {
+            if (selectionMode) {
+              notifier.toggleSelect(book.id);
+            } else {
+              Navigator.of(
+                context,
+              ).push(appRoute((_) => ReaderPage(bookId: book.id)));
+            }
+          },
+          // 长按进入多选模式（普通模式下）；已在多选模式则忽略
+          onLongPress: selectionMode
+              ? null
+              : () => notifier.enterSelection(book.id),
+          selected: selected,
+        ),
+      ),
     );
   }
 

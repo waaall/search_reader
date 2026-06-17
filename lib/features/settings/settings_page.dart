@@ -3,6 +3,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../domain/reader_settings.dart';
 import '../../shared/l10n/app_l10n.dart';
+import '../../shared/theme/app_tokens.dart';
+import '../../shared/widgets/app_animated_switcher.dart';
 import 'app_locale_provider.dart';
 import 'settings_provider.dart';
 
@@ -17,7 +19,9 @@ class SettingsPage extends ConsumerWidget {
 
     return Scaffold(
       appBar: AppBar(title: Text(l10n.settingsTitle)),
-      body: _buildAsyncBody(context, ref, asyncSettings, asyncLocale),
+      body: AppAnimatedSwitcher(
+        child: _buildAsyncBody(context, ref, asyncSettings, asyncLocale),
+      ),
     );
   }
 
@@ -29,13 +33,22 @@ class SettingsPage extends ConsumerWidget {
   ) {
     final l10n = context.l10n;
     if (asyncSettings.isLoading || asyncLocale.isLoading) {
-      return const Center(child: CircularProgressIndicator());
+      return const Center(
+        key: ValueKey('settings-loading'),
+        child: CircularProgressIndicator(),
+      );
     }
     if (asyncSettings.hasError) {
-      return Center(child: Text(l10n.loadFailed(asyncSettings.error!)));
+      return Center(
+        key: const ValueKey('settings-error'),
+        child: Text(l10n.loadFailed(asyncSettings.error!)),
+      );
     }
     if (asyncLocale.hasError) {
-      return Center(child: Text(l10n.loadFailed(asyncLocale.error!)));
+      return Center(
+        key: const ValueKey('settings-locale-error'),
+        child: Text(l10n.loadFailed(asyncLocale.error!)),
+      );
     }
     return _buildBody(
       context,
@@ -55,6 +68,7 @@ class SettingsPage extends ConsumerWidget {
     final settingsNotifier = ref.read(readerSettingsProvider.notifier);
     final localeNotifier = ref.read(appLocaleProvider.notifier);
     return ListView(
+      key: const ValueKey('settings-content'),
       children: [
         _section(l10n.systemSettingsSection),
         _settingLabel(l10n.displayLanguage),
@@ -93,9 +107,9 @@ class SettingsPage extends ConsumerWidget {
           labelOf: (v) => _readingModeLabel(context, v),
           onChanged: settingsNotifier.updateReadingMode,
         ),
-        const SizedBox(height: 24),
+        const SizedBox(height: AppSpacing.lg),
         Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 16),
+          padding: const EdgeInsets.symmetric(horizontal: AppSpacing.md),
           child: _Preview(settings: settings),
         ),
       ],
@@ -103,7 +117,12 @@ class SettingsPage extends ConsumerWidget {
   }
 
   Widget _section(String label) => Padding(
-    padding: const EdgeInsets.fromLTRB(16, 20, 16, 8),
+    padding: const EdgeInsets.fromLTRB(
+      AppSpacing.md,
+      20,
+      AppSpacing.md,
+      AppSpacing.sm,
+    ),
     child: Text(
       label,
       style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
@@ -111,7 +130,12 @@ class SettingsPage extends ConsumerWidget {
   );
 
   Widget _settingLabel(String label) => Padding(
-    padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+    padding: const EdgeInsets.fromLTRB(
+      AppSpacing.md,
+      12,
+      AppSpacing.md,
+      AppSpacing.sm,
+    ),
     child: Text(label, style: const TextStyle(fontWeight: FontWeight.w600)),
   );
 
@@ -123,7 +147,7 @@ class SettingsPage extends ConsumerWidget {
     required Future<void> Function(T) onChanged,
   }) {
     return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 16),
+      padding: const EdgeInsets.symmetric(horizontal: AppSpacing.md),
       child: SegmentedButton<T>(
         segments: values
             .map((v) => ButtonSegment<T>(value: v, label: Text(labelOf(v))))
@@ -186,20 +210,26 @@ class _Preview extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(16),
+    final previewStyle = TextStyle(
+      color: settings.theme.foreground,
+      fontSize: settings.fontSize.size,
+      height: settings.lineHeight.multiplier,
+    );
+    return AnimatedContainer(
+      duration: AppMotion.normal,
+      curve: AppMotion.easeOut,
+      padding: const EdgeInsets.all(AppSpacing.md),
       decoration: BoxDecoration(
         color: settings.theme.background,
-        borderRadius: BorderRadius.circular(8),
+        borderRadius: BorderRadius.circular(AppRadius.sm),
         border: Border.all(color: Colors.grey.shade300),
       ),
-      child: Text(
-        context.l10n.settingsPreviewText,
-        style: TextStyle(
-          color: settings.theme.foreground,
-          fontSize: settings.fontSize.size,
-          height: settings.lineHeight.multiplier,
-        ),
+      // 预览区随字号、行距与主题变化做平滑过渡，避免设置项切换时画面突变
+      child: AnimatedDefaultTextStyle(
+        duration: AppMotion.normal,
+        curve: AppMotion.easeOut,
+        style: previewStyle,
+        child: Text(context.l10n.settingsPreviewText),
       ),
     );
   }

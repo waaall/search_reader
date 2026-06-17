@@ -5,7 +5,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/db/daos.dart';
 import '../../shared/l10n/app_formatters.dart';
 import '../../shared/l10n/app_l10n.dart';
+import '../../shared/navigation/app_routes.dart';
 import '../../shared/theme/app_tokens.dart';
+import '../../shared/widgets/app_animated_switcher.dart';
 import '../reader/reader_page.dart';
 import 'all_bookmarks_provider.dart';
 
@@ -17,53 +19,67 @@ class AllBookmarksPage extends ConsumerWidget {
     final asyncList = ref.watch(allBookmarksProvider);
     return Scaffold(
       appBar: AppBar(title: Text(context.l10n.bookmarksTitle)),
-      body: asyncList.when(
-        loading: () => const Center(child: CircularProgressIndicator()),
-        error: (e, _) => Center(child: Text(context.l10n.loadFailed(e))),
-        data: (list) {
-          if (list.isEmpty) {
-            return const _EmptyHint();
-          }
-          // 把 list 按 bookId 分组保留服务端排序，组内顺序即章节顺序
-          final groups = _groupByBook(list);
-          // 用 ListView.builder + 自维护索引展平：每组先插入 header，再插各 item
-          // 用一个统一的 _Row 序列简化渲染
-          final rows = _flatten(groups);
-          return ListView.separated(
-            itemCount: rows.length,
-            separatorBuilder: (_, i) {
-              final r = rows[i];
-              return r is _BookmarkRow
-                  ? const Divider(height: 1)
-                  : const SizedBox.shrink();
-            },
-            itemBuilder: (_, i) {
-              final r = rows[i];
-              if (r is _BookHeaderRow) {
-                return _BookHeader(
-                  title: r.title,
-                ).animate().fadeIn(duration: AppMotion.fast);
-              }
-              if (r is _BookmarkRow) {
-                return _BookmarkTile(
-                  item: r.item,
-                  onTap: () => Navigator.of(context).push(
-                    MaterialPageRoute(
-                      builder: (_) => ReaderPage(
-                        bookId: r.item.bookmark.bookId,
-                        initialChapterIndex: r.item.bookmark.chapterIndex,
-                        initialCharOffset: r.item.bookmark.charOffset,
-                      ),
-                    ),
-                  ),
-                  onDelete: () =>
-                      ref.read(allBookmarksProvider.notifier).remove(r.item),
-                ).animate().fadeIn(duration: AppMotion.fast);
-              }
-              return const SizedBox.shrink();
-            },
-          );
-        },
+      body: AppAnimatedSwitcher(
+        child: asyncList.when(
+          loading: () => const Center(
+            key: ValueKey('bookmarks-loading'),
+            child: CircularProgressIndicator(),
+          ),
+          error: (e, _) => Center(
+            key: const ValueKey('bookmarks-error'),
+            child: Text(context.l10n.loadFailed(e)),
+          ),
+          data: (list) {
+            if (list.isEmpty) {
+              return const _EmptyHint(key: ValueKey('bookmarks-empty'));
+            }
+            // 把 list 按 bookId 分组保留服务端排序，组内顺序即章节顺序
+            final groups = _groupByBook(list);
+            // 用 ListView.builder + 自维护索引展平：每组先插入 header，再插各 item
+            // 用一个统一的 _Row 序列简化渲染
+            final rows = _flatten(groups);
+            return ListView.separated(
+              key: ValueKey('bookmarks-list-${rows.length}'),
+              itemCount: rows.length,
+              separatorBuilder: (_, i) {
+                final r = rows[i];
+                return r is _BookmarkRow
+                    ? const Divider(height: 1)
+                    : const SizedBox.shrink();
+              },
+              itemBuilder: (_, i) {
+                final r = rows[i];
+                if (r is _BookHeaderRow) {
+                  return _BookHeader(title: r.title)
+                      .animate(delay: (i < 8 ? 20 * i : 0).ms)
+                      .fadeIn(duration: AppMotion.fast)
+                      .slideY(begin: 0.04, end: 0, duration: AppMotion.fast);
+                }
+                if (r is _BookmarkRow) {
+                  return _BookmarkTile(
+                        item: r.item,
+                        onTap: () => Navigator.of(context).push(
+                          appRoute(
+                            (_) => ReaderPage(
+                              bookId: r.item.bookmark.bookId,
+                              initialChapterIndex: r.item.bookmark.chapterIndex,
+                              initialCharOffset: r.item.bookmark.charOffset,
+                            ),
+                          ),
+                        ),
+                        onDelete: () => ref
+                            .read(allBookmarksProvider.notifier)
+                            .remove(r.item),
+                      )
+                      .animate(delay: (i < 8 ? 20 * i : 0).ms)
+                      .fadeIn(duration: AppMotion.fast)
+                      .slideY(begin: 0.04, end: 0, duration: AppMotion.fast);
+                }
+                return const SizedBox.shrink();
+              },
+            );
+          },
+        ),
       ),
     );
   }
@@ -190,7 +206,7 @@ class _BookmarkTile extends StatelessWidget {
 }
 
 class _EmptyHint extends StatelessWidget {
-  const _EmptyHint();
+  const _EmptyHint({super.key});
 
   @override
   Widget build(BuildContext context) {

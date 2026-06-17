@@ -2,6 +2,8 @@
 // 颜色与组件样式属于主题层，由 AppTheme 经 flex_color_scheme 生成；
 // 此文件只收纳 widget 代码里直接写出的数值，避免散落硬编码。
 
+import 'package:flutter/animation.dart';
+
 // 间距阶梯
 abstract final class AppSpacing {
   static const double xs = 4;
@@ -20,6 +22,12 @@ abstract final class AppRadius {
 
 // 动效时长：统一微动画节奏
 abstract final class AppMotion {
+  static const Duration micro = Duration(milliseconds: 120);
   static const Duration fast = Duration(milliseconds: 180);
   static const Duration normal = Duration(milliseconds: 260);
+  static const Duration slow = Duration(milliseconds: 360);
+
+  // 页面与组件统一使用柔和曲线，避免过弹、过冲造成花哨感
+  static const Curve easeOut = Curves.easeOutCubic;
+  static const Curve easeInOut = Curves.easeInOutCubic;
 }
