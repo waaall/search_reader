@@ -14,9 +14,7 @@
 
 这个最好做，当前基本已经做到。
 
----
-
-#### 计划： 数据库逻辑更新后保留书架数据，只删冗余内容
+### 计划： 数据库逻辑更新后保留书架数据，只删冗余内容
 
 目标：
 
@@ -42,4 +40,9 @@
 
 这个方案不会保留冗余旧文件，也不会丢用户书架。
 
----
+
+## 导入/索引可能卡 UI
+
+导入时解析章节、生成 bigram、逐章写 FTS 都在主流程里执行：
+/Users/zhengxu/Desktop/some_code/my-personal-git/search_reader/lib/core/db/daos.dart
+10MB txt 或大 epub 时，用户可能感觉 App 卡住。后面最好把解析和索引放到 isolate，或者至少分批写入并让 UI 可取消。
