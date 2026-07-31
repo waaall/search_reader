@@ -3,15 +3,13 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../domain/reader_settings.dart';
 import '../../shared/l10n/app_l10n.dart';
-import '../../shared/navigation/app_routes.dart';
 import '../../shared/theme/app_tokens.dart';
-import '../library/library_provider.dart';
-import '../settings/settings_page.dart';
 import '../settings/settings_provider.dart';
 import 'bookmark_provider.dart';
 import 'pagination.dart';
 import 'reader_provider.dart';
 import 'widgets/reader_drawer.dart';
+import 'widgets/reader_settings_sheet.dart';
 
 class ReaderPage extends ConsumerWidget {
   final int bookId;
@@ -118,14 +116,6 @@ class _ReaderShellState extends ConsumerState<_ReaderShell> {
     }
   }
 
-  @override
-  void dispose() {
-    // 离开阅读页时刷新书架：阅读时已写入 last_read_at，
-    // 让书架的"最近阅读"排序与未读标签在返回后立即生效
-    ref.invalidate(libraryProvider);
-    super.dispose();
-  }
-
   // 按 (章节/字号/行距/可用宽高) 缓存分页结果；颜色等不影响布局，不入键
   Pagination _paginate({
     required String text,
@@ -197,9 +187,7 @@ class _ReaderShellState extends ConsumerState<_ReaderShell> {
               // 公共回调参数（两种模式共用）
               void tapCenter() => setState(() => _menuVisible = !_menuVisible);
               void openChapters() => Scaffold.of(context).openDrawer();
-              void openSettings() => Navigator.of(
-                context,
-              ).push(appRoute((_) => const SettingsPage()));
+              void openSettings() => showReaderSettingsSheet(context);
               Future<void> goBack(int charOffset) =>
                   _saveProgressAndPop(charOffset);
               final onPrevChapter = state.hasPrev
@@ -230,6 +218,7 @@ class _ReaderShellState extends ConsumerState<_ReaderShell> {
                   chapterText: state.currentChapterText,
                   padding: _padding,
                   textStyle: textStyle,
+                  themeBg: settings.theme.background,
                   themeFg: settings.theme.foreground,
                   chapterTitle: state.currentChapter.title,
                   menuVisible: _menuVisible,
@@ -265,6 +254,7 @@ class _ReaderShellState extends ConsumerState<_ReaderShell> {
                 pagination: pagination,
                 padding: _padding,
                 textStyle: textStyle,
+                themeBg: settings.theme.background,
                 themeFg: settings.theme.foreground,
                 chapterTitle: state.currentChapter.title,
                 menuVisible: _menuVisible,
@@ -381,6 +371,7 @@ class _PaginatedView extends StatefulWidget {
   final Pagination pagination;
   final EdgeInsets padding;
   final TextStyle textStyle;
+  final Color themeBg;
   final Color themeFg;
   final String chapterTitle;
   final bool menuVisible;
@@ -402,6 +393,7 @@ class _PaginatedView extends StatefulWidget {
     required this.pagination,
     required this.padding,
     required this.textStyle,
+    required this.themeBg,
     required this.themeFg,
     required this.chapterTitle,
     required this.menuVisible,
@@ -524,6 +516,8 @@ class _PaginatedViewState extends State<_PaginatedView> {
           child: _ReaderTopBar(
             visible: widget.menuVisible,
             title: widget.chapterTitle,
+            background: widget.themeBg,
+            foreground: widget.themeFg,
             onBack: () =>
                 widget.onBack(widget.pagination.offsetOfPage(_currentPage)),
           ),
@@ -579,9 +573,11 @@ class _PaginatedViewState extends State<_PaginatedView> {
             visible: widget.menuVisible,
             previousLabel: l10n.previousChapter,
             nextLabel: l10n.nextChapter,
-            contentsLabel: l10n.contentsAndBookmarks,
-            bookmarkLabel: l10n.addBookmark,
-            settingsLabel: l10n.commonSettings,
+            contentsLabel: l10n.contentsTitle,
+            bookmarkLabel: l10n.bookmarksTitle,
+            settingsLabel: l10n.readingSettingsSection,
+            background: widget.themeBg,
+            foreground: widget.themeFg,
             onPrevChapter: widget.onPrevChapter,
             onNextChapter: widget.onNextChapter,
             onOpenChapters: widget.onOpenChapters,
@@ -611,11 +607,15 @@ class _PaginatedViewState extends State<_PaginatedView> {
 class _ReaderTopBar extends StatelessWidget {
   final bool visible;
   final String title;
+  final Color background;
+  final Color foreground;
   final VoidCallback onBack;
 
   const _ReaderTopBar({
     required this.visible,
     required this.title,
+    required this.background,
+    required this.foreground,
     required this.onBack,
   });
 
@@ -633,17 +633,21 @@ class _ReaderTopBar extends StatelessWidget {
           curve: AppMotion.easeOut,
           child: DecoratedBox(
             decoration: BoxDecoration(
-              color: Colors.black.withValues(alpha: 0.52),
+              color: background.withValues(alpha: 0.92),
+              border: Border(
+                bottom: BorderSide(color: foreground.withValues(alpha: 0.1)),
+              ),
             ),
             child: Padding(
               padding: const EdgeInsets.symmetric(
-                horizontal: AppSpacing.md,
-                vertical: AppSpacing.sm + AppSpacing.xs,
+                horizontal: AppSpacing.sm,
+                vertical: AppSpacing.xs,
               ),
               child: Row(
                 children: [
                   IconButton(
-                    icon: const Icon(Icons.arrow_back, color: Colors.white),
+                    color: foreground,
+                    icon: const Icon(Icons.arrow_back),
                     onPressed: onBack,
                   ),
                   Expanded(
@@ -651,7 +655,10 @@ class _ReaderTopBar extends StatelessWidget {
                       title,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(color: Colors.white),
+                      style: TextStyle(
+                        color: foreground,
+                        fontWeight: FontWeight.w500,
+                      ),
                     ),
                   ),
                 ],
@@ -672,6 +679,8 @@ class _ReaderBottomBar extends StatelessWidget {
   final String contentsLabel;
   final String bookmarkLabel;
   final String settingsLabel;
+  final Color background;
+  final Color foreground;
   final VoidCallback? onPrevChapter;
   final VoidCallback? onNextChapter;
   final VoidCallback onOpenChapters;
@@ -685,6 +694,8 @@ class _ReaderBottomBar extends StatelessWidget {
     required this.contentsLabel,
     required this.bookmarkLabel,
     required this.settingsLabel,
+    required this.background,
+    required this.foreground,
     required this.onPrevChapter,
     required this.onNextChapter,
     required this.onOpenChapters,
@@ -694,6 +705,10 @@ class _ReaderBottomBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final panelColor = Color.alphaBlend(
+      foreground.withValues(alpha: 0.07),
+      background,
+    );
     return IgnorePointer(
       ignoring: !visible,
       child: AnimatedSlide(
@@ -704,44 +719,79 @@ class _ReaderBottomBar extends StatelessWidget {
           opacity: visible ? 1 : 0,
           duration: AppMotion.fast,
           curve: AppMotion.easeOut,
-          child: DecoratedBox(
-            decoration: BoxDecoration(
-              color: Colors.black.withValues(alpha: 0.72),
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(
+              AppSpacing.md,
+              0,
+              AppSpacing.md,
+              AppSpacing.md,
             ),
-            child: Padding(
-              padding: const EdgeInsets.symmetric(
-                horizontal: AppSpacing.sm,
-                vertical: AppSpacing.sm,
-              ),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceAround,
-                children: [
-                  _ReaderMenuButton(
-                    icon: Icons.skip_previous,
-                    label: previousLabel,
-                    onTap: onPrevChapter,
+            child: Align(
+              alignment: Alignment.bottomCenter,
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 620),
+                child: DecoratedBox(
+                  decoration: BoxDecoration(
+                    color: panelColor.withValues(alpha: 0.98),
+                    borderRadius: BorderRadius.circular(AppRadius.lg),
+                    border: Border.all(
+                      color: foreground.withValues(alpha: 0.12),
+                    ),
+                    boxShadow: [
+                      BoxShadow(
+                        color: foreground.withValues(alpha: 0.08),
+                        blurRadius: 18,
+                        offset: const Offset(0, 6),
+                      ),
+                    ],
                   ),
-                  _ReaderMenuButton(
-                    icon: Icons.skip_next,
-                    label: nextLabel,
-                    onTap: onNextChapter,
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: AppSpacing.xs,
+                      vertical: AppSpacing.sm,
+                    ),
+                    child: Row(
+                      children: [
+                        _ReaderChapterButton(
+                          icon: Icons.chevron_left,
+                          label: previousLabel,
+                          foreground: foreground,
+                          onTap: onPrevChapter,
+                        ),
+                        Expanded(
+                          child: _ReaderMenuButton(
+                            icon: Icons.list_alt_outlined,
+                            label: contentsLabel,
+                            foreground: foreground,
+                            onTap: onOpenChapters,
+                          ),
+                        ),
+                        Expanded(
+                          child: _ReaderMenuButton(
+                            icon: Icons.bookmark_add_outlined,
+                            label: bookmarkLabel,
+                            foreground: foreground,
+                            onTap: onAddBookmark,
+                          ),
+                        ),
+                        Expanded(
+                          child: _ReaderMenuButton(
+                            icon: Icons.text_fields,
+                            label: settingsLabel,
+                            foreground: foreground,
+                            onTap: onOpenSettings,
+                          ),
+                        ),
+                        _ReaderChapterButton(
+                          icon: Icons.chevron_right,
+                          label: nextLabel,
+                          foreground: foreground,
+                          onTap: onNextChapter,
+                        ),
+                      ],
+                    ),
                   ),
-                  _ReaderMenuButton(
-                    icon: Icons.list,
-                    label: contentsLabel,
-                    onTap: onOpenChapters,
-                  ),
-                  _ReaderMenuButton(
-                    icon: Icons.bookmark_add_outlined,
-                    label: bookmarkLabel,
-                    onTap: onAddBookmark,
-                  ),
-                  _ReaderMenuButton(
-                    icon: Icons.text_fields,
-                    label: settingsLabel,
-                    onTap: onOpenSettings,
-                  ),
-                ],
+                ),
               ),
             ),
           ),
@@ -754,46 +804,72 @@ class _ReaderBottomBar extends StatelessWidget {
 class _ReaderMenuButton extends StatelessWidget {
   final IconData icon;
   final String label;
-  final VoidCallback? onTap;
+  final Color foreground;
+  final VoidCallback onTap;
 
   const _ReaderMenuButton({
     required this.icon,
     required this.label,
+    required this.foreground,
     required this.onTap,
   });
 
   @override
   Widget build(BuildContext context) {
-    final disabled = onTap == null;
-    final color = disabled
-        ? Colors.white.withValues(alpha: 0.36)
-        : Colors.white.withValues(alpha: 0.96);
-    // 等宽分配 + 图标在上文字在下：窄屏（手机）下 5 个按钮也能完整显示
-    return Expanded(
-      child: TextButton(
-        onPressed: onTap,
-        style: TextButton.styleFrom(
-          padding: const EdgeInsets.symmetric(
-            vertical: AppSpacing.sm - 2,
-            horizontal: AppSpacing.xs,
-          ),
-          minimumSize: Size.zero,
-          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+    return TextButton(
+      onPressed: onTap,
+      style: TextButton.styleFrom(
+        foregroundColor: foreground,
+        padding: const EdgeInsets.symmetric(
+          vertical: AppSpacing.sm - 2,
+          horizontal: AppSpacing.xs,
         ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(icon, color: color, size: 22),
-            const SizedBox(height: AppSpacing.xs),
-            Text(
-              label,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: TextStyle(color: color, fontSize: 11),
-            ),
-          ],
+        minimumSize: Size.zero,
+        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(AppRadius.sm),
         ),
       ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 21),
+          const SizedBox(height: AppSpacing.xs),
+          Text(
+            label,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(color: foreground, fontSize: 11),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// 上一章 / 下一章只保留图标与 tooltip，视觉权重低于中间三个一级操作。
+class _ReaderChapterButton extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final Color foreground;
+  final VoidCallback? onTap;
+
+  const _ReaderChapterButton({
+    required this.icon,
+    required this.label,
+    required this.foreground,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return IconButton(
+      tooltip: label,
+      onPressed: onTap,
+      visualDensity: VisualDensity.compact,
+      color: foreground.withValues(alpha: 0.62),
+      disabledColor: foreground.withValues(alpha: 0.22),
+      icon: Icon(icon, size: 22),
     );
   }
 }
@@ -804,6 +880,7 @@ class _ScrollView extends StatefulWidget {
   final String chapterText;
   final EdgeInsets padding;
   final TextStyle textStyle;
+  final Color themeBg;
   final Color themeFg;
   final String chapterTitle;
   final bool menuVisible;
@@ -822,6 +899,7 @@ class _ScrollView extends StatefulWidget {
     required this.chapterText,
     required this.padding,
     required this.textStyle,
+    required this.themeBg,
     required this.themeFg,
     required this.chapterTitle,
     required this.menuVisible,
@@ -919,6 +997,8 @@ class _ScrollViewState extends State<_ScrollView> {
           child: _ReaderTopBar(
             visible: widget.menuVisible,
             title: widget.chapterTitle,
+            background: widget.themeBg,
+            foreground: widget.themeFg,
             onBack: () => widget.onBack(_currentCharOffset),
           ),
         ),
@@ -949,9 +1029,11 @@ class _ScrollViewState extends State<_ScrollView> {
             visible: widget.menuVisible,
             previousLabel: l10n.previousChapter,
             nextLabel: l10n.nextChapter,
-            contentsLabel: l10n.contentsAndBookmarks,
-            bookmarkLabel: l10n.addBookmark,
-            settingsLabel: l10n.commonSettings,
+            contentsLabel: l10n.contentsTitle,
+            bookmarkLabel: l10n.bookmarksTitle,
+            settingsLabel: l10n.readingSettingsSection,
+            background: widget.themeBg,
+            foreground: widget.themeFg,
             onPrevChapter: widget.onPrevChapter,
             onNextChapter: widget.onNextChapter,
             onOpenChapters: widget.onOpenChapters,

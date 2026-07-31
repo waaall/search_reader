@@ -332,6 +332,12 @@ abstract class AppLocalizations {
   /// **'Import books'**
   String get importBooks;
 
+  /// No description provided for @importFirstBook.
+  ///
+  /// In en, this message translates to:
+  /// **'Import your first book'**
+  String get importFirstBook;
+
   /// No description provided for @exitSelection.
   ///
   /// In en, this message translates to:

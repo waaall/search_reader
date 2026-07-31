@@ -49,6 +49,7 @@
     }
   },
   "importBooks": "Import books",
+  "importFirstBook": "Import your first book",
   "exitSelection": "Exit selection",
   "selectedBooks": "{count, plural, =0{No books selected} =1{1 book selected} other{{count} books selected}}",
   "@selectedBooks": {

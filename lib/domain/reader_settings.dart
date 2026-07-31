@@ -24,16 +24,16 @@ enum LineHeightLevel {
 // 阅读器主题：背景与正文颜色
 enum ReaderThemeMode {
   light(
-    background: Color(0xFFFFFFFF),
-    foreground: Color(0xFF222222),
+    background: Color(0xFFFAFAF8),
+    foreground: Color(0xFF24262B),
   ),
   dark(
-    background: Color(0xFF1A1A1A),
-    foreground: Color(0xFFCCCCCC),
+    background: Color(0xFF191B1F),
+    foreground: Color(0xFFD7D9DE),
   ),
   sepia(
-    background: Color(0xFFF5ECD8),
-    foreground: Color(0xFF5B4636),
+    background: Color(0xFFF4ECD9),
+    foreground: Color(0xFF57483A),
   );
 
   final Color background;

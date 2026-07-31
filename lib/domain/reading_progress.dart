@@ -32,3 +32,23 @@ class ReadingProgress {
     );
   }
 }
+
+// 书架使用的整本书阅读进度摘要。
+// 数据库仍保存“章节索引 + 章节内偏移”，这里统一换算为全书进度，避免 UI 重复计算。
+@immutable
+class BookProgressSummary {
+  final int bookId;
+  final int currentChar;
+  final int totalChars;
+
+  const BookProgressSummary({
+    required this.bookId,
+    required this.currentChar,
+    required this.totalChars,
+  });
+
+  double get fraction {
+    if (totalChars <= 0) return 0;
+    return (currentChar / totalChars).clamp(0.0, 1.0);
+  }
+}

@@ -6,6 +6,7 @@ import '../../shared/l10n/app_l10n.dart';
 import '../../shared/theme/app_tokens.dart';
 import '../../shared/widgets/app_animated_switcher.dart';
 import 'app_locale_provider.dart';
+import 'reader_settings_labels.dart';
 import 'settings_provider.dart';
 
 class SettingsPage extends ConsumerWidget {
@@ -83,28 +84,28 @@ class SettingsPage extends ConsumerWidget {
         _segmentedEnum<FontSizeLevel>(
           values: FontSizeLevel.values,
           current: settings.fontSize,
-          labelOf: (v) => _fontSizeLabel(context, v),
+          labelOf: (v) => readerFontSizeLabel(context, v),
           onChanged: settingsNotifier.updateFontSize,
         ),
         _settingLabel(l10n.lineHeightSection),
         _segmentedEnum<LineHeightLevel>(
           values: LineHeightLevel.values,
           current: settings.lineHeight,
-          labelOf: (v) => _lineHeightLabel(context, v),
+          labelOf: (v) => readerLineHeightLabel(context, v),
           onChanged: settingsNotifier.updateLineHeight,
         ),
         _settingLabel(l10n.readerThemeSection),
         _segmentedEnum<ReaderThemeMode>(
           values: ReaderThemeMode.values,
           current: settings.theme,
-          labelOf: (v) => _themeLabel(context, v),
+          labelOf: (v) => readerThemeLabel(context, v),
           onChanged: settingsNotifier.updateTheme,
         ),
         _settingLabel(l10n.readingModeSection),
         _segmentedEnum<ReadingMode>(
           values: ReadingMode.values,
           current: settings.readingMode,
-          labelOf: (v) => _readingModeLabel(context, v),
+          labelOf: (v) => readingModeLabel(context, v),
           onChanged: settingsNotifier.updateReadingMode,
         ),
         const SizedBox(height: AppSpacing.lg),
@@ -164,42 +165,6 @@ class SettingsPage extends ConsumerWidget {
       AppLocaleMode.system => l10n.languageSystem,
       AppLocaleMode.simplifiedChinese => l10n.languageSimplifiedChinese,
       AppLocaleMode.english => l10n.languageEnglish,
-    };
-  }
-
-  String _fontSizeLabel(BuildContext context, FontSizeLevel level) {
-    final l10n = context.l10n;
-    return switch (level) {
-      FontSizeLevel.small => l10n.fontSizeSmall,
-      FontSizeLevel.medium => l10n.fontSizeMedium,
-      FontSizeLevel.large => l10n.fontSizeLarge,
-      FontSizeLevel.extraLarge => l10n.fontSizeExtraLarge,
-    };
-  }
-
-  String _lineHeightLabel(BuildContext context, LineHeightLevel level) {
-    final l10n = context.l10n;
-    return switch (level) {
-      LineHeightLevel.compact => l10n.lineHeightCompact,
-      LineHeightLevel.normal => l10n.lineHeightNormal,
-      LineHeightLevel.relaxed => l10n.lineHeightRelaxed,
-    };
-  }
-
-  String _themeLabel(BuildContext context, ReaderThemeMode mode) {
-    final l10n = context.l10n;
-    return switch (mode) {
-      ReaderThemeMode.light => l10n.readerThemeLight,
-      ReaderThemeMode.dark => l10n.readerThemeDark,
-      ReaderThemeMode.sepia => l10n.readerThemeSepia,
-    };
-  }
-
-  String _readingModeLabel(BuildContext context, ReadingMode mode) {
-    final l10n = context.l10n;
-    return switch (mode) {
-      ReadingMode.paginated => l10n.readingModePaginated,
-      ReadingMode.scroll => l10n.readingModeScroll,
     };
   }
 }

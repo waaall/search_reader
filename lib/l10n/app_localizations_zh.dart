@@ -131,6 +131,9 @@ class AppLocalizationsZh extends AppLocalizations {
   String get importBooks => '导入书籍';
 
   @override
+  String get importFirstBook => '导入第一本书';
+
+  @override
   String get exitSelection => '退出多选';
 
   @override

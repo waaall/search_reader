@@ -132,6 +132,9 @@ class AppLocalizationsEn extends AppLocalizations {
   String get importBooks => 'Import books';
 
   @override
+  String get importFirstBook => 'Import your first book';
+
+  @override
   String get exitSelection => 'Exit selection';
 
   @override

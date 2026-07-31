@@ -39,6 +39,7 @@
   "libraryTitle": "书架",
   "loadLibraryFailed": "加载书架失败：{error}",
   "importBooks": "导入书籍",
+  "importFirstBook": "导入第一本书",
   "exitSelection": "退出多选",
   "selectedBooks": "已选 {count} 本",
   "selectAll": "全选",

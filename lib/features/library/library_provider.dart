@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/db/daos.dart';
 import '../../core/storage/book_storage.dart';
 import '../../domain/book.dart';
+import '../../domain/reading_progress.dart';
 import '../importer/import_progress.dart';
 import '../importer/importer_service.dart';
 import 'library_error.dart';
@@ -11,6 +12,7 @@ import 'library_error.dart';
 // 书架状态：所有书 + 当前导入进度 + 多选状态
 class LibraryState {
   final List<Book> books;
+  final Map<int, BookProgressSummary> progressByBookId;
   final ImportPhase? importing; // null 表示当前没有导入中
   final LibraryError? error;
   final bool selectionMode; // 是否处于多选模式
@@ -18,6 +20,7 @@ class LibraryState {
 
   const LibraryState({
     this.books = const [],
+    this.progressByBookId = const {},
     this.importing,
     this.error,
     this.selectionMode = false,
@@ -26,6 +29,7 @@ class LibraryState {
 
   LibraryState copyWith({
     List<Book>? books,
+    Map<int, BookProgressSummary>? progressByBookId,
     ImportPhase? importing,
     bool clearImporting = false,
     LibraryError? error,
@@ -35,6 +39,7 @@ class LibraryState {
   }) {
     return LibraryState(
       books: books ?? this.books,
+      progressByBookId: progressByBookId ?? this.progressByBookId,
       importing: clearImporting ? null : (importing ?? this.importing),
       error: clearError ? null : (error ?? this.error),
       selectionMode: selectionMode ?? this.selectionMode,
@@ -45,12 +50,29 @@ class LibraryState {
 
 class LibraryNotifier extends AsyncNotifier<LibraryState> {
   final BookDao _bookDao = BookDao();
+  final ProgressDao _progressDao = ProgressDao();
   final ImporterService _importer = ImporterService();
 
   @override
   Future<LibraryState> build() async {
+    final data = await _loadLibraryData();
+    return LibraryState(
+      books: data.books,
+      progressByBookId: data.progressByBookId,
+    );
+  }
+
+  // 书籍与进度始终成组刷新，保证书架标题、时间和百分比来自同一轮数据。
+  Future<({List<Book> books, Map<int, BookProgressSummary> progressByBookId})>
+  _loadLibraryData() async {
     final books = await _bookDao.listAll();
-    return LibraryState(books: books);
+    final summaries = await _progressDao.listBookSummaries();
+    return (
+      books: books,
+      progressByBookId: {
+        for (final summary in summaries) summary.bookId: summary,
+      },
+    );
   }
 
   // 弹出系统选择器，导入用户选择的 txt / epub
@@ -134,9 +156,11 @@ class LibraryNotifier extends AsyncNotifier<LibraryState> {
   // 刷新书架数据，但保留 error / 多选 / 导入进度 等 UI 状态
   // （旧版本会重建整个 LibraryState 把 error 一起清掉，导致导入失败"看上去没反应"）
   Future<void> refresh() async {
-    final books = await _bookDao.listAll();
+    final data = await _loadLibraryData();
     final cur = state.value ?? const LibraryState();
-    state = AsyncData(cur.copyWith(books: books));
+    state = AsyncData(
+      cur.copyWith(books: data.books, progressByBookId: data.progressByBookId),
+    );
   }
 
   Future<void> deleteBook(Book book) async {
@@ -210,10 +234,11 @@ class LibraryNotifier extends AsyncNotifier<LibraryState> {
         failures.add(DeleteFailure(title: b.title, details: e));
       }
     }
-    final books = await _bookDao.listAll();
+    final data = await _loadLibraryData();
     state = AsyncData(
       LibraryState(
-        books: books,
+        books: data.books,
+        progressByBookId: data.progressByBookId,
         error: failures.isEmpty ? null : PartialDeleteFailedError(failures),
       ),
     );

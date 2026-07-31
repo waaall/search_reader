@@ -1,4 +1,5 @@
 import 'package:flutter/widgets.dart';
+import 'package:intl/intl.dart';
 
 import '../../features/importer/import_progress.dart';
 import '../../features/library/library_error.dart';
@@ -25,6 +26,11 @@ class AppFormatters {
       return l10n.characterCountTenThousand((count / 10000).toStringAsFixed(1));
     }
     return l10n.characterCount(count);
+  }
+
+  static String readingProgress(BuildContext context, double fraction) {
+    final locale = Localizations.localeOf(context).toLanguageTag();
+    return NumberFormat.percentPattern(locale).format(fraction.clamp(0.0, 1.0));
   }
 
   static String importPhase(BuildContext context, ImportPhase phase) {

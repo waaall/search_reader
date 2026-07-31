@@ -155,6 +155,33 @@ class ProgressDao {
       conflictAlgorithm: ConflictAlgorithm.replace,
     );
   }
+
+  // 一次查询得到整个书架的全书进度，避免按书逐条查询造成 N+1 开销。
+  // 章节起点 + 章节内偏移就是当前阅读位置在原文中的全局字符坐标。
+  Future<List<BookProgressSummary>> listBookSummaries() async {
+    final rows = await _db.rawQuery('''
+      SELECT
+        b.id AS book_id,
+        b.total_chars AS total_chars,
+        c.start_char AS chapter_start,
+        rp.char_offset AS char_offset
+      FROM books b
+      LEFT JOIN reading_progress rp ON rp.book_id = b.id
+      LEFT JOIN chapters c
+        ON c.book_id = rp.book_id AND c.chapter_index = rp.chapter_index
+    ''');
+
+    return rows.map((row) {
+      final totalChars = row['total_chars'] as int;
+      final chapterStart = (row['chapter_start'] as int?) ?? 0;
+      final charOffset = (row['char_offset'] as int?) ?? 0;
+      return BookProgressSummary(
+        bookId: row['book_id'] as int,
+        currentChar: (chapterStart + charOffset).clamp(0, totalChars),
+        totalChars: totalChars,
+      );
+    }).toList();
+  }
 }
 
 // 跨书书签视图：bookmark + 书名 + 章节标题（用于全局书签页面展示）
