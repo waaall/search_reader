@@ -1,15 +1,12 @@
+// 数据库初始化入口：负责打开数据库、执行版本迁移并在成功后清理孤儿文件。
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 import '../storage/book_storage.dart';
+import 'database_migrations.dart';
+import 'database_schema.dart';
 
-// 数据库版本：每次 Schema 变更需要 +1
-// v2：FTS5 trigram → unicode61 + bigram 化的 search 列；chapters 加 content 列
-// v3：新增 bookmarks 表（书签：章节内字符偏移 + 可选备注）
-// v4：移除 chapters.content（搜索 snippet 改为按起止位置切沙盒文件，节省 DB 体积）
-// 升级策略：drop & recreate（旧数据不保留，需要重新导入）
-const int _kDbVersion = 4;
 const String _kDbFileName = 'search_reader.db';
 
 // 单例数据库句柄：通过 [appDatabase] 全局访问
@@ -41,28 +38,29 @@ class AppDatabase {
 
     final dir = await getApplicationDocumentsDirectory();
     final path = p.join(dir.path, _kDbFileName);
+    var didUpgrade = false;
 
     final db = await openDatabase(
       path,
-      version: _kDbVersion,
+      version: DatabaseSchema.version,
       onConfigure: (db) async {
         // 启用外键级联删除（books → chapters / progress）
         await db.execute('PRAGMA foreign_keys = ON');
       },
       onCreate: (db, version) async {
-        await _createSchema(db);
+        await DatabaseSchema.create(db);
       },
       onUpgrade: (db, oldV, newV) async {
-        // drop & recreate：旧数据全部丢弃，结构按新版重建
-        await _dropSchema(db);
-        await _createSchema(db);
-        // 旧书记录已丢弃，同步清掉沙盒里的孤儿书籍文件
-        // 清理失败不阻断迁移：DB 结构已就绪，文件残留可接受
-        try {
-          await BookStorage.purgeAll();
-        } catch (_) {}
+        // sqflite 会在事务中执行回调；任一步失败都会回滚且不会提升版本号。
+        await migrateDatabase(db, oldV, newV);
+        didUpgrade = true;
       },
     );
+
+    // 文件系统不参与数据库事务，只能在迁移提交后按数据库白名单清理。
+    if (didUpgrade) {
+      await _deleteUnreferencedBookFiles(db);
+    }
 
     _instance = AppDatabase._(db);
   }
@@ -74,97 +72,15 @@ class AppDatabase {
   }
 }
 
-// 全套 DDL：每次表/索引变更同步更新此函数，并提升 _kDbVersion
-Future<void> _createSchema(Database db) async {
-  await db.execute('''
-    CREATE TABLE books (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      title TEXT NOT NULL,
-      author TEXT,
-      file_path TEXT NOT NULL,
-      encoding TEXT NOT NULL,
-      total_chars INTEGER NOT NULL,
-      created_at INTEGER NOT NULL,
-      last_read_at INTEGER
-    )
-  ''');
-
-  // chapters 只存元信息与起止位置；正文与搜索 snippet 都按起止位置切沙盒文件，
-  // 避免在数据库里再保留一整份书（原 chapters.content 列已移除）
-  await db.execute('''
-    CREATE TABLE chapters (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      book_id INTEGER NOT NULL,
-      chapter_index INTEGER NOT NULL,
-      title TEXT NOT NULL,
-      start_char INTEGER NOT NULL,
-      end_char INTEGER NOT NULL,
-      FOREIGN KEY (book_id) REFERENCES books(id) ON DELETE CASCADE
-    )
-  ''');
-  await db.execute(
-    'CREATE INDEX idx_chapters_book ON chapters(book_id, chapter_index)',
-  );
-
-  await db.execute('''
-    CREATE TABLE reading_progress (
-      book_id INTEGER PRIMARY KEY,
-      chapter_index INTEGER NOT NULL,
-      char_offset INTEGER NOT NULL,
-      updated_at INTEGER NOT NULL,
-      FOREIGN KEY (book_id) REFERENCES books(id) ON DELETE CASCADE
-    )
-  ''');
-
-  // 全文索引：unicode61 分词器（按空白切分），title/search 列存 bigram 化序列
-  // 选择 bigram 而非 trigram：让 ≥2 字符的中文关键词也能搜到（trigram 至少要 3 字）
-  // 不用 contentless 模式：老版本 SQLite（Android 13 及以下）不支持 contentless DELETE
-  // 代价：FTS5 表内多存一份 bigram 序列（约原文 2x），换来跨平台稳定的 DELETE
-  // snippet 不依赖 FTS5 内部内容，由 Dart 侧按章节起止位置切沙盒文件生成
-  await db.execute('''
-    CREATE VIRTUAL TABLE chapters_fts USING fts5(
-      title,
-      search,
-      tokenize='unicode61'
-    )
-  ''');
-
-  await db.execute('''
-    CREATE TABLE settings (
-      key TEXT PRIMARY KEY,
-      value TEXT NOT NULL
-    )
-  ''');
-
-  // 书签表：(book_id, chapter_index, char_offset) 唯一约束保证去重
-  // 重复加书签时通过 ON CONFLICT REPLACE 覆盖 note 与 created_at
-  await db.execute('''
-    CREATE TABLE bookmarks (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      book_id INTEGER NOT NULL,
-      chapter_index INTEGER NOT NULL,
-      char_offset INTEGER NOT NULL,
-      note TEXT,
-      created_at INTEGER NOT NULL,
-      FOREIGN KEY (book_id) REFERENCES books(id) ON DELETE CASCADE
-    )
-  ''');
-  await db.execute(
-    'CREATE UNIQUE INDEX idx_bookmarks_pos ON bookmarks(book_id, chapter_index, char_offset)',
-  );
-  await db.execute(
-    'CREATE INDEX idx_bookmarks_book ON bookmarks(book_id, created_at DESC)',
-  );
-}
-
-// 删除全部表：升级时先 drop 再 recreate
-// 顺序无所谓（外键约束 PRAGMA foreign_keys 是会话级，drop 时不强制）
-// settings 也一并清空：阅读偏好不算关键数据，重设成本低
-Future<void> _dropSchema(Database db) async {
-  await db.execute('DROP TABLE IF EXISTS chapters_fts');
-  await db.execute('DROP TABLE IF EXISTS bookmarks');
-  await db.execute('DROP TABLE IF EXISTS reading_progress');
-  await db.execute('DROP TABLE IF EXISTS chapters');
-  await db.execute('DROP TABLE IF EXISTS books');
-  await db.execute('DROP TABLE IF EXISTS settings');
+Future<void> _deleteUnreferencedBookFiles(Database db) async {
+  try {
+    final rows = await db.query('books', columns: ['file_path']);
+    final referencedPaths = rows
+        .map((row) => row['file_path'])
+        .whereType<String>()
+        .toSet();
+    await BookStorage.deleteUnreferencedFiles(referencedPaths);
+  } catch (_) {
+    // 清理失败不能影响已经成功提交的迁移；残留文件比误删或启动失败更安全。
+  }
 }

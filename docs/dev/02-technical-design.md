@@ -409,9 +409,10 @@ LIMIT 100;
 
 数据库迁移清理：
 
-- 当前升级策略仍是 drop & recreate：旧数据库行全部丢弃。
-- 因旧书记录被丢弃，`onUpgrade` 会调用 `BookStorage.purgeAll()` 清空沙盒 `books/` 目录，避免留下无法被书架引用的旧文件。
-- 若后续改为保留书架数据的精细迁移，需要增加“按 `books.file_path` 白名单清理孤儿文件”的流程。
+- `database_migrations.dart` 为每个目标版本注册独立的增量迁移，禁止升级时整体删除业务表。
+- sqflite 在事务内执行 `onUpgrade`；迁移失败会回滚，数据库版本不会提升。
+- v1 → v2 重建 bigram FTS，v2 → v3 新增书签，v3 → v4 重建 `chapters` 以移除 `content`，其余用户数据保持不变。
+- 迁移提交后，才由 `BookStorage.deleteUnreferencedFiles()` 按 `books.file_path` 白名单清理 `books/` 直属孤儿文件；清理失败不影响数据库和应用启动。
 
 ### 5.8 主题、设计 token 与动效（shared/theme）
 

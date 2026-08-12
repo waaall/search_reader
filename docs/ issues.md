@@ -2,43 +2,22 @@
 
 ## 数据库逻辑更新策略
 
-现在代码是这个策略：
+已修复。数据库升级不再执行 drop & recreate，也不会清空 `books/`：
 
-- 升级 DB 时 drop & recreate
-- 然后 `BookStorage.purgeAll()` 删除沙盒 `books/` 目录
+- `database_migrations.dart` 按目标版本注册增量迁移。
+- v1 → v2 从旧 FTS 表恢复章节正文并重建 bigram 索引。
+- v2 → v3 只新增书签表及索引。
+- v3 → v4 通过新表复制元数据，移除 `chapters.content`。
+- 迁移由 sqflite 事务保护，完成后执行 `PRAGMA foreign_key_check`。
+- 事务提交后才按 `books.file_path` 白名单删除无引用文件。
 
-结果是：
+回归测试覆盖 v1、v2、v3 直接升级到 v4，验证以下数据：
 
-- 不会留下冗余旧文件
-- 但用户书架、进度、书签都会丢，需要重新导入
-
-这个最好做，当前基本已经做到。
-
-### 计划： 数据库逻辑更新后保留书架数据，只删冗余内容
-
-目标：
-
-- 保留 `books`
-- 保留 `reading_progress`
-- 保留 `bookmarks`
-- 保留沙盒里的真实书籍文件
-- 删除旧 `chapters.content` 冗余列
-- 清理没有被 `books.file_path` 引用的孤儿文件
-
-做法大概是：
-
-1. `CREATE TABLE chapters_new (...)`，不含 `content`
-2. 从旧 `chapters` 复制元信息：
-   ```sql
-   INSERT INTO chapters_new(id, book_id, chapter_index, title, start_char, end_char)
-   SELECT id, book_id, chapter_index, title, start_char, end_char FROM chapters;
-   ```
-3. `DROP TABLE chapters`
-4. `ALTER TABLE chapters_new RENAME TO chapters`
-5. 重建索引
-6. 清理沙盒中未被 `books.file_path` 引用的文件
-
-这个方案不会保留冗余旧文件，也不会丢用户书架。
+- `books`、章节元数据和文件路径；
+- `reading_progress`；
+- `settings`；
+- v3 已有的 `bookmarks`；
+- 可用的 FTS5 搜索索引。
 
 
 ## 导入/索引可能卡 UI

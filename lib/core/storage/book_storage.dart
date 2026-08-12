@@ -1,3 +1,4 @@
+// 沙盒书籍文件管理：统一处理导入、读取、删除和迁移后的孤儿清理。
 import 'dart:io';
 
 import 'package:path/path.dart' as p;
@@ -70,14 +71,25 @@ class BookStorage {
     }
   }
 
-  // 清空整个沙盒书籍目录
-  // 数据库 drop & recreate 迁移会丢弃所有书记录，需同步删除实体文件，
-  // 否则旧书文件成孤儿永久占盘
-  static Future<void> purgeAll() async {
+  // 删除 books/ 目录中未被数据库引用的直属文件。
+  // 调用方必须在数据库迁移提交后传入完整白名单，避免事务回滚后文件无法恢复。
+  static Future<void> deleteUnreferencedFiles(
+    Set<String> referencedPaths,
+  ) async {
     final root = await _root();
     final dir = Directory(p.join(root.path, _booksDir));
-    if (await dir.exists()) {
-      await dir.delete(recursive: true);
+    if (!await dir.exists()) return;
+
+    final normalizedReferences = referencedPaths.map(p.normalize).toSet();
+    await for (final entity in dir.list(followLinks: false)) {
+      // 当前存储策略只在 books/ 直属目录创建文件；目录和链接一律保留。
+      if (entity is! File) continue;
+      final relativePath = p.normalize(
+        p.relative(entity.path, from: root.path),
+      );
+      if (!normalizedReferences.contains(relativePath)) {
+        await entity.delete();
+      }
     }
   }
 }
