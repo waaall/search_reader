@@ -3,7 +3,7 @@ import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
-import '../storage/book_storage.dart';
+import 'application_data_recovery.dart';
 import 'database_migrations.dart';
 import 'database_schema.dart';
 
@@ -38,7 +38,6 @@ class AppDatabase {
 
     final dir = await getApplicationDocumentsDirectory();
     final path = p.join(dir.path, _kDbFileName);
-    var didUpgrade = false;
 
     final db = await openDatabase(
       path,
@@ -53,14 +52,11 @@ class AppDatabase {
       onUpgrade: (db, oldV, newV) async {
         // sqflite 会在事务中执行回调；任一步失败都会回滚且不会提升版本号。
         await migrateDatabase(db, oldV, newV);
-        didUpgrade = true;
       },
     );
 
-    // 文件系统不参与数据库事务，只能在迁移提交后按数据库白名单清理。
-    if (didUpgrade) {
-      await _deleteUnreferencedBookFiles(db);
-    }
+    // 每次启动都恢复未完成导入，并清理崩溃后遗留的坏记录和孤儿文件。
+    await recoverApplicationData(db);
 
     _instance = AppDatabase._(db);
   }
@@ -69,18 +65,5 @@ class AppDatabase {
   static Future<void> close() async {
     await _instance?._db.close();
     _instance = null;
-  }
-}
-
-Future<void> _deleteUnreferencedBookFiles(Database db) async {
-  try {
-    final rows = await db.query('books', columns: ['file_path']);
-    final referencedPaths = rows
-        .map((row) => row['file_path'])
-        .whereType<String>()
-        .toSet();
-    await BookStorage.deleteUnreferencedFiles(referencedPaths);
-  } catch (_) {
-    // 清理失败不能影响已经成功提交的迁移；残留文件比误删或启动失败更安全。
   }
 }

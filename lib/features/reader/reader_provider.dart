@@ -1,3 +1,4 @@
+// 阅读器状态管理：加载书籍、章节、分页、进度与书签状态。
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/db/daos.dart';
@@ -162,7 +163,7 @@ class ReaderNotifier extends AutoDisposeFamilyAsyncNotifier<ReaderState, int> {
   // 读全文（带缓存）
   Future<void> _ensureFullText(Book book) async {
     if (_fullText != null) return;
-    _fullText = await BookStorage.readFullText(book.filePath);
+    _fullText = await BookStorage.shared.readFullText(book.filePath);
   }
 
   // 按章节起止位置截取文本

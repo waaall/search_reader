@@ -1,9 +1,11 @@
+// 全文搜索服务：查询 FTS 元数据并从正式书籍文件生成摘要和跳转位置。
 import '../../core/db/daos.dart';
 import '../../core/db/text_index.dart';
 import '../../core/storage/book_storage.dart';
 
 class SearchService {
   final SearchDao _dao = SearchDao();
+  final BookStorage _storage = BookStorage.shared;
 
   // 把用户输入转成 FTS5 安全查询，从 DAO 拿命中行，
   // 再按 (book_file_path, start_char, end_char) 切沙盒文件得到章节原文，
@@ -20,20 +22,23 @@ class SearchService {
     final fullTextCache = <int, String>{};
     final hits = <SearchHit>[];
     for (final m in matches) {
-      final full = fullTextCache[m.bookId] ??=
-          await BookStorage.readFullText(m.bookFilePath);
+      final full = fullTextCache[m.bookId] ??= await _storage.readFullText(
+        m.bookFilePath,
+      );
       final start = m.chapterStart.clamp(0, full.length);
       final end = m.chapterEnd.clamp(0, full.length);
       final content = full.substring(start, end);
-      hits.add(SearchHit(
-        bookId: m.bookId,
-        bookTitle: m.bookTitle,
-        chapterId: m.chapterId,
-        chapterIndex: m.chapterIndex,
-        chapterTitle: m.chapterTitle,
-        snippet: makeSnippet(content, raw),
-        charOffset: findMatchOffset(content, raw),
-      ));
+      hits.add(
+        SearchHit(
+          bookId: m.bookId,
+          bookTitle: m.bookTitle,
+          chapterId: m.chapterId,
+          chapterIndex: m.chapterIndex,
+          chapterTitle: m.chapterTitle,
+          snippet: makeSnippet(content, raw),
+          charOffset: findMatchOffset(content, raw),
+        ),
+      );
     }
     return hits;
   }

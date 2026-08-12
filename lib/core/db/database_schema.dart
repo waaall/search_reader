@@ -3,7 +3,7 @@ import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 abstract final class DatabaseSchema {
   // 每次结构变更都要递增，并在 database_migrations.dart 注册对应迁移。
-  static const int version = 4;
+  static const int version = 5;
 
   static Future<void> create(DatabaseExecutor db) async {
     await createBooks(db);
@@ -13,6 +13,7 @@ abstract final class DatabaseSchema {
     await createChaptersFts(db);
     await createSettings(db);
     await createBookmarks(db);
+    await createImportJobs(db);
   }
 
   static Future<void> createBooks(DatabaseExecutor db) async {
@@ -103,5 +104,19 @@ abstract final class DatabaseSchema {
       'CREATE INDEX idx_bookmarks_book '
       'ON bookmarks(book_id, created_at DESC)',
     );
+  }
+
+  static Future<void> createImportJobs(DatabaseExecutor db) async {
+    // 记录数据库已提交、但沙盒文件尚未从临时路径原子发布的导入任务。
+    await db.execute('''
+      CREATE TABLE import_jobs (
+        book_id INTEGER PRIMARY KEY,
+        staged_path TEXT NOT NULL,
+        target_path TEXT NOT NULL,
+        state TEXT NOT NULL CHECK (state IN ('ready_to_finalize')),
+        created_at INTEGER NOT NULL,
+        FOREIGN KEY (book_id) REFERENCES books(id) ON DELETE CASCADE
+      )
+    ''');
   }
 }

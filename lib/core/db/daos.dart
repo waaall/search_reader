@@ -1,3 +1,4 @@
+// 数据访问层：封装书籍原子导入、查询、进度、书签与全文搜索操作。
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 import '../../domain/book.dart';
@@ -6,56 +7,46 @@ import '../../domain/chapter.dart';
 import '../../domain/reading_progress.dart';
 import '../parser/book_format.dart';
 import 'database.dart';
+import 'database_operations.dart';
 import 'text_index.dart';
 
 // 数据访问层：每个表一个 DAO 类
 // 所有 DAO 共享同一个 Database 单例
 
 class BookDao {
-  Database get _db => AppDatabase.instance.db;
+  BookDao({Database? database}) : _database = database;
+
+  final Database? _database;
+  Database get _db => _database ?? AppDatabase.instance.db;
 
   // 列出所有书籍，按最近阅读时间倒序（无阅读则按创建时间）
   Future<List<Book>> listAll() async {
-    final rows = await _db.query(
-      'books',
-      orderBy: 'COALESCE(last_read_at, created_at) DESC',
-    );
+    // import_jobs 存在表示文件尚未原子发布，不能把半成品暴露给书架。
+    final rows = await _db.rawQuery('''
+      SELECT b.*
+      FROM books b
+      WHERE NOT EXISTS (
+        SELECT 1 FROM import_jobs job WHERE job.book_id = b.id
+      )
+      ORDER BY COALESCE(b.last_read_at, b.created_at) DESC
+    ''');
     return rows.map(Book.fromRow).toList();
   }
 
   Future<Book?> findById(int id) async {
-    final rows = await _db.query('books', where: 'id = ?', whereArgs: [id]);
+    final rows = await _db.rawQuery(
+      '''
+      SELECT b.*
+      FROM books b
+      WHERE b.id = ?
+        AND NOT EXISTS (
+          SELECT 1 FROM import_jobs job WHERE job.book_id = b.id
+        )
+      ''',
+      [id],
+    );
     if (rows.isEmpty) return null;
     return Book.fromRow(rows.first);
-  }
-
-  // 插入并返回带 id 的 Book
-  Future<Book> insert({
-    required String title,
-    String? author,
-    required String filePath,
-    required String encoding,
-    required int totalChars,
-  }) async {
-    final now = DateTime.now();
-    final id = await _db.insert('books', {
-      'title': title,
-      'author': author,
-      'file_path': filePath,
-      'encoding': encoding,
-      'total_chars': totalChars,
-      'created_at': now.millisecondsSinceEpoch,
-      'last_read_at': null,
-    });
-    return Book(
-      id: id,
-      title: title,
-      author: author,
-      filePath: filePath,
-      encoding: encoding,
-      totalChars: totalChars,
-      createdAt: now,
-    );
   }
 
   Future<void> updateLastRead(int bookId) async {
@@ -69,49 +60,84 @@ class BookDao {
 
   // 删除：级联清理章节与进度，FTS5 需手动清
   Future<void> delete(int bookId) async {
-    await _db.transaction((txn) async {
-      // 先拿到将被删除的 chapter ids，用于清理 FTS5
-      final chapterRows = await txn.query(
-        'chapters',
-        columns: ['id'],
-        where: 'book_id = ?',
-        whereArgs: [bookId],
-      );
-      for (final row in chapterRows) {
-        await txn.delete('chapters_fts',
-            where: 'rowid = ?', whereArgs: [row['id']]);
+    await deleteBookRecords(_db, bookId);
+  }
+}
+
+class BookImportDao {
+  BookImportDao({Database? database}) : _database = database;
+
+  final Database? _database;
+  Database get _db => _database ?? AppDatabase.instance.db;
+
+  // books、chapters、FTS 和恢复日志必须在同一事务内提交。
+  Future<Book> createPendingImport({
+    required String title,
+    String? author,
+    required String stagedPath,
+    required String targetPath,
+    required ParsedBook parsed,
+  }) async {
+    final now = DateTime.now();
+    final id = await _db.transaction((txn) async {
+      final bookId = await txn.insert('books', {
+        'title': title,
+        'author': author,
+        'file_path': targetPath,
+        'encoding': parsed.encoding,
+        'total_chars': parsed.totalChars,
+        'created_at': now.millisecondsSinceEpoch,
+        'last_read_at': null,
+      });
+
+      for (var index = 0; index < parsed.chapters.length; index++) {
+        final chapter = parsed.chapters[index];
+        final chapterId = await txn.insert('chapters', {
+          'book_id': bookId,
+          'chapter_index': index,
+          'title': chapter.title,
+          'start_char': chapter.startChar,
+          'end_char': chapter.endChar,
+        });
+        await txn.insert('chapters_fts', {
+          'rowid': chapterId,
+          'title': toBigramTokens(chapter.title),
+          'search': toBigramTokens(chapter.content),
+        });
       }
-      await txn.delete('books', where: 'id = ?', whereArgs: [bookId]);
+
+      await txn.insert('import_jobs', {
+        'book_id': bookId,
+        'staged_path': stagedPath,
+        'target_path': targetPath,
+        'state': 'ready_to_finalize',
+        'created_at': now.millisecondsSinceEpoch,
+      });
+      return bookId;
     });
+
+    return Book(
+      id: id,
+      title: title,
+      author: author,
+      filePath: targetPath,
+      encoding: parsed.encoding,
+      totalChars: parsed.totalChars,
+      createdAt: now,
+    );
+  }
+
+  Future<void> markImportComplete(int bookId) async {
+    await _db.delete('import_jobs', where: 'book_id = ?', whereArgs: [bookId]);
+  }
+
+  Future<void> cancelPendingImport(int bookId) async {
+    await deleteBookRecords(_db, bookId);
   }
 }
 
 class ChapterDao {
   Database get _db => AppDatabase.instance.db;
-
-  // 批量写入章节 + FTS5 索引（同事务，失败回滚）
-  // chapters 表存原文，chapters_fts 存 bigram 化的 token 序列（unicode61 按空格分词）
-  Future<void> insertAll(int bookId, List<ParsedChapter> chapters) async {
-    await _db.transaction((txn) async {
-      for (var i = 0; i < chapters.length; i++) {
-        final c = chapters[i];
-        final id = await txn.insert('chapters', {
-          'book_id': bookId,
-          'chapter_index': i,
-          'title': c.title,
-          'start_char': c.startChar,
-          'end_char': c.endChar,
-        });
-        // FTS5 行用同一个 rowid，便于 join；title/search 都做 bigram 化
-        // 这样用户搜 "你好"（2 字）能命中标题或正文里的连续 "你好"
-        await txn.insert('chapters_fts', {
-          'rowid': id,
-          'title': toBigramTokens(c.title),
-          'search': toBigramTokens(c.content),
-        });
-      }
-    });
-  }
 
   Future<List<Chapter>> listByBook(int bookId) async {
     final rows = await _db.query(
@@ -169,6 +195,9 @@ class ProgressDao {
       LEFT JOIN reading_progress rp ON rp.book_id = b.id
       LEFT JOIN chapters c
         ON c.book_id = rp.book_id AND c.chapter_index = rp.chapter_index
+      WHERE NOT EXISTS (
+        SELECT 1 FROM import_jobs job WHERE job.book_id = b.id
+      )
     ''');
 
     return rows.map((row) {
@@ -215,19 +244,21 @@ class BookmarkDao {
       ORDER BY b.title ASC, bm.chapter_index ASC, bm.char_offset ASC
     ''');
     return rows
-        .map((r) => BookmarkWithMeta(
-              bookmark: Bookmark.fromRow({
-                'id': r['id'],
-                'book_id': r['book_id'],
-                'chapter_index': r['chapter_index'],
-                'char_offset': r['char_offset'],
-                'note': r['note'],
-                'created_at': r['created_at'],
-              }),
-              bookTitle: r['book_title'] as String,
-              // 章节缺失时返回空串，具体兜底文案交给 UI 按当前语言生成。
-              chapterTitle: (r['chapter_title'] as String?) ?? '',
-            ))
+        .map(
+          (r) => BookmarkWithMeta(
+            bookmark: Bookmark.fromRow({
+              'id': r['id'],
+              'book_id': r['book_id'],
+              'chapter_index': r['chapter_index'],
+              'char_offset': r['char_offset'],
+              'note': r['note'],
+              'created_at': r['created_at'],
+            }),
+            bookTitle: r['book_title'] as String,
+            // 章节缺失时返回空串，具体兜底文案交给 UI 按当前语言生成。
+            chapterTitle: (r['chapter_title'] as String?) ?? '',
+          ),
+        )
         .toList();
   }
 
@@ -253,17 +284,13 @@ class BookmarkDao {
     String? note,
   }) async {
     final now = DateTime.now();
-    final id = await _db.insert(
-      'bookmarks',
-      {
-        'book_id': bookId,
-        'chapter_index': chapterIndex,
-        'char_offset': charOffset,
-        'note': note,
-        'created_at': now.millisecondsSinceEpoch,
-      },
-      conflictAlgorithm: ConflictAlgorithm.replace,
-    );
+    final id = await _db.insert('bookmarks', {
+      'book_id': bookId,
+      'chapter_index': chapterIndex,
+      'char_offset': charOffset,
+      'note': note,
+      'created_at': now.millisecondsSinceEpoch,
+    }, conflictAlgorithm: ConflictAlgorithm.replace);
     return Bookmark(
       id: id,
       bookId: bookId,
@@ -310,11 +337,10 @@ class SettingsDao {
   }
 
   Future<void> set(String key, String value) async {
-    await _db.insert(
-      'settings',
-      {'key': key, 'value': value},
-      conflictAlgorithm: ConflictAlgorithm.replace,
-    );
+    await _db.insert('settings', {
+      'key': key,
+      'value': value,
+    }, conflictAlgorithm: ConflictAlgorithm.replace);
   }
 }
 
@@ -386,22 +412,27 @@ class SearchDao {
       JOIN chapters c ON chapters_fts.rowid = c.id
       JOIN books b ON c.book_id = b.id
       WHERE chapters_fts MATCH ?
+        AND NOT EXISTS (
+          SELECT 1 FROM import_jobs job WHERE job.book_id = b.id
+        )
       ORDER BY rank
       LIMIT 100
       ''',
       [ftsQuery],
     );
     return rows
-        .map((r) => ChapterMatchRow(
-              bookId: r['book_id'] as int,
-              bookTitle: r['book_title'] as String,
-              bookFilePath: r['book_file_path'] as String,
-              chapterId: r['chapter_id'] as int,
-              chapterIndex: r['chapter_index'] as int,
-              chapterTitle: r['chapter_title'] as String,
-              chapterStart: r['chapter_start'] as int,
-              chapterEnd: r['chapter_end'] as int,
-            ))
+        .map(
+          (r) => ChapterMatchRow(
+            bookId: r['book_id'] as int,
+            bookTitle: r['book_title'] as String,
+            bookFilePath: r['book_file_path'] as String,
+            chapterId: r['chapter_id'] as int,
+            chapterIndex: r['chapter_index'] as int,
+            chapterTitle: r['chapter_title'] as String,
+            chapterStart: r['chapter_start'] as int,
+            chapterEnd: r['chapter_end'] as int,
+          ),
+        )
         .toList();
   }
 }

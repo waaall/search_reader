@@ -1,12 +1,13 @@
+// 书架状态管理：负责导入、刷新、单本删除与批量删除交互。
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/db/daos.dart';
-import '../../core/storage/book_storage.dart';
 import '../../domain/book.dart';
 import '../../domain/reading_progress.dart';
 import '../importer/import_progress.dart';
 import '../importer/importer_service.dart';
+import 'book_deletion_service.dart';
 import 'library_error.dart';
 
 // 书架状态：所有书 + 当前导入进度 + 多选状态
@@ -52,6 +53,7 @@ class LibraryNotifier extends AsyncNotifier<LibraryState> {
   final BookDao _bookDao = BookDao();
   final ProgressDao _progressDao = ProgressDao();
   final ImporterService _importer = ImporterService();
+  final BookDeletionService _deletionService = BookDeletionService();
 
   @override
   Future<LibraryState> build() async {
@@ -164,8 +166,7 @@ class LibraryNotifier extends AsyncNotifier<LibraryState> {
   }
 
   Future<void> deleteBook(Book book) async {
-    await _bookDao.delete(book.id);
-    await BookStorage.deleteFile(book.filePath);
+    await _deletionService.delete(book);
     await refresh();
   }
 
@@ -228,9 +229,9 @@ class LibraryNotifier extends AsyncNotifier<LibraryState> {
     final failures = <DeleteFailure>[];
     for (final b in targets) {
       try {
-        await _bookDao.delete(b.id);
-        await BookStorage.deleteFile(b.filePath);
+        await _deletionService.delete(b);
       } catch (e) {
+        // 只有数据库删除失败才属于用户可见失败，文件残留会在启动时重试。
         failures.add(DeleteFailure(title: b.title, details: e));
       }
     }

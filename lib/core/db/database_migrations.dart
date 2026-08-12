@@ -10,6 +10,7 @@ final Map<int, DatabaseMigration> _migrationsByTargetVersion = {
   2: _migrateV1ToV2,
   3: _migrateV2ToV3,
   4: _migrateV3ToV4,
+  5: _migrateV4ToV5,
 };
 
 Future<void> migrateDatabase(
@@ -84,4 +85,9 @@ Future<void> _migrateV3ToV4(Database db) async {
   ''');
   await db.execute('DROP TABLE chapters_v3');
   await DatabaseSchema.createChaptersIndex(db);
+}
+
+Future<void> _migrateV4ToV5(Database db) async {
+  // v5 引入导入恢复日志，已有书籍均视为已经完成发布。
+  await DatabaseSchema.createImportJobs(db);
 }

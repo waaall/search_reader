@@ -1,3 +1,4 @@
+// 导入流程编排：解析源文件、暂存、原子写库并发布正式文件。
 import 'dart:io';
 
 import 'package:path/path.dart' as p;
@@ -15,17 +16,17 @@ class ImporterService {
   ImporterService({
     TxtParser? txtParser,
     EpubParser? epubParser,
-    BookDao? bookDao,
-    ChapterDao? chapterDao,
+    BookImportDao? importDao,
+    BookStorage? storage,
   }) : _txtParser = txtParser ?? TxtParser(),
        _epubParser = epubParser ?? EpubParser(),
-       _bookDao = bookDao ?? BookDao(),
-       _chapterDao = chapterDao ?? ChapterDao();
+       _importDao = importDao ?? BookImportDao(),
+       _storage = storage ?? BookStorage.shared;
 
   final TxtParser _txtParser;
   final EpubParser _epubParser;
-  final BookDao _bookDao;
-  final ChapterDao _chapterDao;
+  final BookImportDao _importDao;
+  final BookStorage _storage;
 
   // 按扩展名选择 parser；不支持的格式抛 ImportException
   BookFormatParser _pickParser(String path) {
@@ -43,44 +44,43 @@ class ImporterService {
   // 导入单个文件
   // [externalPath] 来自 file_picker 的原始路径
   // 流程：
-  //   - txt：先 copy 原文件到沙盒 → 解析章节（reader 读盘时再按原编码解码）
-  //   - epub：直接解析外部文件 → 把抽取后的纯文本写入沙盒 .txt（reader 走通用 txt 路径）
+  //   - txt：解析源文件 → 临时区复制原始字节，保留编码
+  //   - epub：解析源文件 → 临时区写入抽取后的 utf-8 纯文本
+  //   - 两者随后统一执行数据库事务、原子 rename 和恢复日志清理
   Future<ImportResult> importFile(
     String externalPath, {
     void Function(ImportPhase phase)? onProgress,
   }) async {
     final ext = p.extension(externalPath).toLowerCase();
-    String? sandboxRelativePath;
-    int? insertedBookId; // 已写入的 books 行 id：失败时需连带回滚
+    StagedBookFile? stagedFile;
+    int? pendingBookId;
     try {
       final parser = _pickParser(externalPath);
 
       onProgress?.call(ImportPhase.parsing);
-      // epub 体积可能远大于解析后的纯文本，先解析再决定写入内容
-      final ParsedBook parsed;
+      // 先解析外部源文件，成功后才向沙盒临时区写入，减少无效文件。
+      final parsed = await parser.parse(externalPath);
+
+      onProgress?.call(ImportPhase.copying);
       if (ext == '.epub') {
-        parsed = await parser.parse(externalPath);
-        onProgress?.call(ImportPhase.copying);
-        sandboxRelativePath = await BookStorage.writeTextFile(parsed.fullText);
+        stagedFile = await _storage.stageTextFile(parsed.fullText);
       } else {
-        onProgress?.call(ImportPhase.copying);
-        sandboxRelativePath = await BookStorage.importFromExternal(
-          externalPath,
-        );
-        final absPath = await BookStorage.resolveAbsolute(sandboxRelativePath);
-        parsed = await parser.parse(absPath);
+        stagedFile = await _storage.stageExternalFile(externalPath);
       }
 
       onProgress?.call(ImportPhase.indexing);
       final title = _titleFromPath(externalPath);
-      final book = await _bookDao.insert(
+      final book = await _importDao.createPendingImport(
         title: title,
-        filePath: sandboxRelativePath,
-        encoding: parsed.encoding,
-        totalChars: parsed.totalChars,
+        stagedPath: stagedFile.stagedPath,
+        targetPath: stagedFile.targetPath,
+        parsed: parsed,
       );
-      insertedBookId = book.id;
-      await _chapterDao.insertAll(book.id, parsed.chapters);
+      pendingBookId = book.id;
+
+      // 数据库事务提交后再原子发布文件，最后删除恢复日志使书籍对查询可见。
+      await _storage.finalizeStagedFile(stagedFile);
+      await _importDao.markImportComplete(book.id);
 
       onProgress?.call(ImportPhase.done);
       return ImportResult(
@@ -90,27 +90,31 @@ class ImporterService {
         totalChars: parsed.totalChars,
       );
     } on DecodingException catch (e) {
-      await _rollback(sandboxRelativePath, insertedBookId);
+      await _rollback(stagedFile, pendingBookId);
       throw ImportException.decodingFailed(e);
     } on ImportException {
+      await _rollback(stagedFile, pendingBookId);
       rethrow;
     } catch (e) {
-      await _rollback(sandboxRelativePath, insertedBookId);
+      await _rollback(stagedFile, pendingBookId);
       throw ImportException.unexpected(e);
     }
   }
 
-  // 导入失败回滚：删掉已写入的 books 行（级联清章节与 FTS）与沙盒文件
-  // 章节索引失败时，books 行已提交、insertAll 事务已回滚，此时只删 books 行即可
-  // 回滚自身的异常吞掉：避免掩盖真正的导入失败原因
-  Future<void> _rollback(String? sandboxRelativePath, int? bookId) async {
+  // 运行期失败尽量撤销两侧；若数据库撤销失败则保留文件和日志供启动恢复。
+  Future<void> _rollback(StagedBookFile? stagedFile, int? bookId) async {
+    var databaseWasRolledBack = bookId == null;
     if (bookId != null) {
       try {
-        await _bookDao.delete(bookId);
+        await _importDao.cancelPendingImport(bookId);
+        databaseWasRolledBack = true;
       } catch (_) {}
     }
-    if (sandboxRelativePath != null) {
-      await BookStorage.deleteFile(sandboxRelativePath);
+    if (stagedFile != null && databaseWasRolledBack) {
+      try {
+        await _storage.discardStagedFile(stagedFile);
+        await _storage.deleteFile(stagedFile.targetPath);
+      } catch (_) {}
     }
   }
 

@@ -17,8 +17,8 @@ const _chapterContent = '序章你好世界';
 void main() {
   setUpAll(sqfliteFfiInit);
 
-  for (final oldVersion in [1, 2, 3]) {
-    test('v$oldVersion 升级到 v4 时保留用户数据', () async {
+  for (final oldVersion in [1, 2, 3, 4]) {
+    test('v$oldVersion 升级到当前版本时保留用户数据', () async {
       final tempDir = await Directory.systemTemp.createTemp(
         'search_reader_migration_',
       );
@@ -75,7 +75,7 @@ Future<void> _createHistoricalSchema(Database db, int version) async {
       title TEXT NOT NULL,
       start_char INTEGER NOT NULL,
       end_char INTEGER NOT NULL,
-      ${version >= 2 ? 'content TEXT NOT NULL,' : ''}
+      ${version == 2 || version == 3 ? 'content TEXT NOT NULL,' : ''}
       FOREIGN KEY (book_id) REFERENCES books(id) ON DELETE CASCADE
     )
   ''');
@@ -126,7 +126,7 @@ Future<void> _insertFixture(Database db, int version) async {
     'title': _chapterTitle,
     'start_char': 0,
     'end_char': _chapterContent.length,
-    if (version >= 2) 'content': _chapterContent,
+    if (version == 2 || version == 3) 'content': _chapterContent,
   });
   await db.insert('chapters_fts', {
     'rowid': _chapterId,
@@ -183,6 +183,7 @@ Future<void> _expectFixtureWasPreserved(Database db, int oldVersion) async {
   if (oldVersion >= 3) {
     expect(bookmarks.single['note'], '保留的书签');
   }
+  expect(await db.query('import_jobs'), isEmpty);
 
   final matches = await db.rawQuery(
     'SELECT rowid FROM chapters_fts WHERE chapters_fts MATCH ?',

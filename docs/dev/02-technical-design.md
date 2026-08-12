@@ -196,6 +196,16 @@ CREATE UNIQUE INDEX idx_bookmarks_pos
   ON bookmarks(book_id, chapter_index, char_offset);
 CREATE INDEX idx_bookmarks_book
   ON bookmarks(book_id, created_at DESC);
+
+-- 导入恢复日志：存在记录时，书籍尚未对普通查询可见
+CREATE TABLE import_jobs (
+  book_id INTEGER PRIMARY KEY,
+  staged_path TEXT NOT NULL,
+  target_path TEXT NOT NULL,
+  state TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  FOREIGN KEY (book_id) REFERENCES books(id) ON DELETE CASCADE
+);
 ```
 
 **Schema 设计要点**：
@@ -205,7 +215,8 @@ CREATE INDEX idx_bookmarks_book
 - 查询同样 bigram 化 + 紧邻短语：`你好世` → `("你好" + "好世")`，等价于原文连续出现 `你好世`。
 - `bookmarks` 通过 `(book_id, chapter_index, char_offset)` 唯一约束去重；重复加书签时覆盖 note / created_at。
 - 删除书籍时通过 `ON DELETE CASCADE` 级联清理章节、进度、书签；FTS5 需要在 DAO 中按 rowid 手动清理。
-- 数据库升级当前采用 drop & recreate：旧数据会丢弃，需要重新导入。MVP 阶段接受该策略。
+- 数据库按版本执行增量迁移；任一步失败时由 sqflite 回滚整个升级事务。
+- `import_jobs` 是文件发布恢复日志；存在记录的书籍会被书架、进度汇总和搜索查询过滤。
 
 ### 4.2 领域实体（Dart）
 
@@ -393,26 +404,29 @@ LIMIT 100;
 ```text
 导入流程：
 1. file_picker 拿到原文件路径（Android 走 SAF，桌面端为绝对路径）
-2. 持久化到 path_provider.getApplicationDocumentsDirectory()/books/{uuid}.<ext>
+2. 解析成功后写入 appDocs/books/.staging/{uuid}.<ext>.pending，并刷新文件
    - txt：原文件 copy，保留原编码（reader 读盘时再解码）
    - epub：解析后只把抽取出的纯文本以 utf-8 .txt 写入（原 epub 不落盘）
-3. 数据库 books.file_path 存相对路径（不存绝对路径，避免沙盒迁移失效）
-4. 后续读取时：appDocs + 相对路径 → 绝对路径
-5. `readFullText(relativePath)` 统一负责读取、编码检测、换行归一化；Reader 与 Search 共用，保证章节起止位置、搜索跳转 offset、书签 offset 的坐标一致
+3. 同一 SQLite 事务写入 books、chapters、chapters_fts 与 import_jobs
+4. 事务提交后，通过同一卷内 rename 把临时文件原子发布到 books/{uuid}.<ext>
+5. 删除 import_jobs 记录，书籍才对书架与搜索查询可见
+6. 数据库 books.file_path 存正式文件的相对路径（不存绝对路径，避免沙盒迁移失效）
+7. `readFullText(relativePath)` 统一负责读取、编码检测、换行归一化；Reader 与 Search 共用，保证章节起止位置、搜索跳转 offset、书签 offset 的坐标一致
 ```
 
-导入失败回滚：
+崩溃恢复与删除：
 
-- 导入流程先持久化沙盒文件，再写 `books`，最后批量写 `chapters` 与 FTS5。
-- 若复制/解析/索引任一环节失败，`ImporterService._rollback` 会删除已写入的 `books` 行（级联清章节/进度/书签）与沙盒文件。
-- 回滚自身异常不覆盖真实导入错误；UI 展示原始导入失败原因。
+- 数据库事务失败时不会留下半本书；事务前留下的未登记临时文件由启动恢复删除。
+- 数据库已提交但 rename 未执行时，启动恢复按 `import_jobs` 完成文件发布；两端文件都不存在时删除数据库半成品。
+- 启动时同时检查无章节/缺文件的坏书、孤儿 FTS、缺失 FTS、无引用正式文件和无日志临时文件。
+- 删除采用“数据库先提交、文件尽力删除”；文件失败不再误报删除失败，由下次启动的孤儿清理重试。
 
 数据库迁移清理：
 
 - `database_migrations.dart` 为每个目标版本注册独立的增量迁移，禁止升级时整体删除业务表。
 - sqflite 在事务内执行 `onUpgrade`；迁移失败会回滚，数据库版本不会提升。
-- v1 → v2 重建 bigram FTS，v2 → v3 新增书签，v3 → v4 重建 `chapters` 以移除 `content`，其余用户数据保持不变。
-- 迁移提交后，才由 `BookStorage.deleteUnreferencedFiles()` 按 `books.file_path` 白名单清理 `books/` 直属孤儿文件；清理失败不影响数据库和应用启动。
+- v1 → v2 重建 bigram FTS，v2 → v3 新增书签，v3 → v4 重建 `chapters`，v4 → v5 新增导入恢复日志，其余用户数据保持不变。
+- 每次启动都由 `recoverApplicationData()` 对账数据库与沙盒文件；文件清理失败不影响数据库和应用启动。
 
 ### 5.8 主题、设计 token 与动效（shared/theme）
 
