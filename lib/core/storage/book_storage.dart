@@ -1,4 +1,5 @@
 // 沙盒书籍文件管理：通过临时文件发布协议隔离未完成导入。
+import 'dart:developer' as developer;
 import 'dart:io';
 
 import 'package:path/path.dart' as p;
@@ -8,6 +9,9 @@ import 'package:uuid/uuid.dart';
 import '../encoding/text_decoder.dart';
 
 typedef StorageRootProvider = Future<Directory> Function();
+
+// 文件检查使用三态结果，避免把权限或临时 I/O 错误误判成文件不存在。
+enum BookFileAvailability { available, missing, unavailable }
 
 class StagedBookFile {
   final String stagedPath;
@@ -127,6 +131,34 @@ class BookStorage {
   Future<bool> exists(String relativePath) async {
     final absolute = await resolveAbsolute(relativePath);
     return File(absolute).exists();
+  }
+
+  // 恢复流程只在明确得到 notFound 时删除数据库记录；路径或 I/O 异常均视为暂不可确认。
+  Future<BookFileAvailability> inspectAvailability(String relativePath) async {
+    try {
+      final absolute = await resolveAbsolute(relativePath);
+      final stat = await File(absolute).stat();
+      if (stat.type == FileSystemEntityType.file) {
+        return BookFileAvailability.available;
+      }
+      if (stat.type == FileSystemEntityType.notFound) {
+        return BookFileAvailability.missing;
+      }
+      // 目录、链接等非普通文件不应触发不可逆的数据删除，交给后续人工处理。
+      developer.log(
+        '书籍路径不是普通文件，保留数据库记录：$relativePath',
+        name: 'search_reader.book_storage',
+      );
+      return BookFileAvailability.unavailable;
+    } catch (error, stackTrace) {
+      developer.log(
+        '检查书籍文件状态失败，保留数据库记录：$relativePath',
+        name: 'search_reader.book_storage',
+        error: error,
+        stackTrace: stackTrace,
+      );
+      return BookFileAvailability.unavailable;
+    }
   }
 
   // Reader 与 Search 共用此入口，保证章节和书签字符坐标一致。

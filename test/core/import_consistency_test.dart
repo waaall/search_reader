@@ -127,6 +127,85 @@ void main() {
     expect(await storage.exists(orphanFile.targetPath), isFalse);
   });
 
+  test('文件状态无法确认时保留书籍数据并继续恢复', () async {
+    final staged = await storage.stageTextFile(_content);
+    final book = await importDao.createPendingImport(
+      title: '暂时无法检查',
+      stagedPath: staged.stagedPath,
+      targetPath: staged.targetPath,
+      parsed: _parsedBook(),
+    );
+    await storage.finalizeStagedFile(staged);
+    await importDao.markImportComplete(book.id);
+
+    final unavailableStorage = _UnavailableInspectionStorage(
+      rootProvider: () async => tempDirectory,
+    );
+    await recoverApplicationData(database, storage: unavailableStorage);
+
+    expect(
+      await database.query('books', where: 'id = ?', whereArgs: [book.id]),
+      hasLength(1),
+    );
+    expect(await database.query('chapters'), hasLength(1));
+    expect(await storage.exists(staged.targetPath), isTrue);
+  });
+
+  test('文件明确不存在时仍会清理损坏的书籍记录', () async {
+    final staged = await storage.stageTextFile(_content);
+    final book = await importDao.createPendingImport(
+      title: '文件已丢失',
+      stagedPath: staged.stagedPath,
+      targetPath: staged.targetPath,
+      parsed: _parsedBook(),
+    );
+    await storage.finalizeStagedFile(staged);
+    await importDao.markImportComplete(book.id);
+    await storage.deleteFile(staged.targetPath);
+
+    await recoverApplicationData(database, storage: storage);
+
+    expect(
+      await database.query('books', where: 'id = ?', whereArgs: [book.id]),
+      isEmpty,
+    );
+    expect(await database.query('chapters'), isEmpty);
+  });
+
+  test('非法书籍路径不会阻断启动或删除用户数据', () async {
+    final bookId = await database.insert('books', {
+      'title': '路径异常但保留',
+      'author': null,
+      'file_path': '../outside.txt',
+      'encoding': 'utf-8',
+      'total_chars': _content.length,
+      'created_at': 1,
+      'last_read_at': null,
+    });
+    final chapterId = await database.insert('chapters', {
+      'book_id': bookId,
+      'chapter_index': 0,
+      'title': '第一章',
+      'start_char': 0,
+      'end_char': _content.length,
+    });
+    await database.insert('chapters_fts', {
+      'rowid': chapterId,
+      'title': toBigramTokens('第一章'),
+      'search': toBigramTokens(_content),
+    });
+
+    await expectLater(
+      recoverApplicationData(database, storage: storage),
+      completes,
+    );
+
+    expect(
+      await database.query('books', where: 'id = ?', whereArgs: [bookId]),
+      hasLength(1),
+    );
+  });
+
   test('启动时根据正式文件补建缺失的 FTS 行', () async {
     final staged = await storage.stageTextFile(_content);
     final book = await importDao.createPendingImport(
@@ -197,5 +276,14 @@ class _FailingDeletionStorage extends BookStorage {
   @override
   Future<void> deleteFile(String relativePath) {
     throw const FileSystemException('模拟文件删除失败');
+  }
+}
+
+class _UnavailableInspectionStorage extends BookStorage {
+  _UnavailableInspectionStorage({required super.rootProvider});
+
+  @override
+  Future<BookFileAvailability> inspectAvailability(String relativePath) async {
+    return BookFileAvailability.unavailable;
   }
 }

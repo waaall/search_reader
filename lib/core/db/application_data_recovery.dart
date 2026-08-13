@@ -65,8 +65,16 @@ Future<void> _removeBrokenBooks(Database db, BookStorage storage) async {
   for (final book in books) {
     final bookId = book['id'] as int;
     final chapterCount = book['chapter_count'] as int;
-    final fileExists = await storage.exists(book['file_path'] as String);
-    if (chapterCount == 0 || !fileExists) {
+    if (chapterCount == 0) {
+      await deleteBookRecords(db, bookId);
+      continue;
+    }
+
+    final availability = await storage.inspectAvailability(
+      book['file_path'] as String,
+    );
+    if (availability == BookFileAvailability.missing) {
+      // 只有存储层明确确认文件不存在时才删除；检查异常时保留数据并继续启动。
       await deleteBookRecords(db, bookId);
     }
   }
