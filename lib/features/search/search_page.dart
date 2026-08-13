@@ -1,3 +1,4 @@
+// 搜索页：管理输入防抖、请求竞态保护与结果展示。
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -12,38 +13,54 @@ import '../../shared/widgets/app_animated_switcher.dart';
 import '../reader/reader_page.dart';
 import 'search_service.dart';
 
+typedef SearchRunner =
+    Future<List<SearchHit>> Function(
+      String raw, {
+      SearchCancellationCheck? isCancelled,
+    });
+
 class SearchPage extends ConsumerStatefulWidget {
-  const SearchPage({super.key});
+  final SearchRunner? search;
+  final Duration debounceDuration;
+
+  const SearchPage({
+    super.key,
+    this.search,
+    this.debounceDuration = const Duration(milliseconds: 250),
+  });
 
   @override
   ConsumerState<SearchPage> createState() => _SearchPageState();
 }
 
 class _SearchPageState extends ConsumerState<SearchPage> {
-  final _service = SearchService();
   final _controller = TextEditingController();
+  late final SearchRunner _search;
   Timer? _debounce;
+  int _searchGeneration = 0;
   List<SearchHit> _hits = const [];
   bool _loading = false;
   String? _error;
 
   @override
+  void initState() {
+    super.initState();
+    _search = widget.search ?? SearchService().search;
+  }
+
+  @override
   void dispose() {
     _debounce?.cancel();
+    _searchGeneration++;
     _controller.dispose();
     super.dispose();
   }
 
-  // 输入防抖，避免每个字符都查一次数据库
+  // 每次输入变化立即递增世代，使已在执行的旧请求当场失效。
   void _onChanged(String text) {
+    final generation = ++_searchGeneration;
     _debounce?.cancel();
-    _debounce = Timer(
-      const Duration(milliseconds: 250),
-      () => _runSearch(text),
-    );
-  }
 
-  Future<void> _runSearch(String text) async {
     if (text.trim().isEmpty) {
       setState(() {
         _hits = const [];
@@ -52,19 +69,37 @@ class _SearchPageState extends ConsumerState<SearchPage> {
       });
       return;
     }
+
     setState(() {
       _loading = true;
       _error = null;
     });
+
+    // 非空查询使用防抖，避免每个字符都查一次数据库。
+    _debounce = Timer(
+      widget.debounceDuration,
+      () => _runSearch(text, generation),
+    );
+  }
+
+  bool _isCurrent(int generation) => mounted && generation == _searchGeneration;
+
+  Future<void> _runSearch(String text, int generation) async {
+    if (!_isCurrent(generation)) return;
+
     try {
-      final hits = await _service.search(text);
-      if (!mounted) return;
+      final hits = await _search(
+        text,
+        isCancelled: () => !_isCurrent(generation),
+      );
+      // 只有最新世代能写入 UI，避免旧结果或旧错误覆盖新查询。
+      if (!_isCurrent(generation)) return;
       setState(() {
         _hits = hits;
         _loading = false;
       });
     } catch (e) {
-      if (!mounted) return;
+      if (!_isCurrent(generation)) return;
       setState(() {
         _hits = const [];
         _loading = false;

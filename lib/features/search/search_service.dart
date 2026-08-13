@@ -3,6 +3,8 @@ import '../../core/db/daos.dart';
 import '../../core/db/text_index.dart';
 import '../../core/storage/book_storage.dart';
 
+typedef SearchCancellationCheck = bool Function();
+
 class SearchService {
   final SearchDao _dao = SearchDao();
   final BookStorage _storage = BookStorage.shared;
@@ -12,19 +14,28 @@ class SearchService {
   // 在 Dart 侧生成 snippet 与跳转字符偏移
   // - bigram 化保证 ≥2 字关键词命中（trigram 至少 3 字）
   // - 文件 I/O 在此层：同一本书的多个命中只读一次文件
-  Future<List<SearchHit>> search(String raw) async {
+  Future<List<SearchHit>> search(
+    String raw, {
+    SearchCancellationCheck? isCancelled,
+  }) async {
+    if (isCancelled?.call() ?? false) return const [];
+
     final ftsQuery = toBigramQuery(raw);
     if (ftsQuery.isEmpty) return const [];
     final matches = await _dao.queryMatches(ftsQuery);
+    if (isCancelled?.call() ?? false) return const [];
     if (matches.isEmpty) return const [];
 
     // 同一本书多个命中只读一次文件（解码 + 换行归一化是开销大头）
     final fullTextCache = <int, String>{};
     final hits = <SearchHit>[];
     for (final m in matches) {
+      // Future 无法强制中断已开始的 SQLite/文件 I/O，但可及时停止后续命中处理。
+      if (isCancelled?.call() ?? false) return const [];
       final full = fullTextCache[m.bookId] ??= await _storage.readFullText(
         m.bookFilePath,
       );
+      if (isCancelled?.call() ?? false) return const [];
       final start = m.chapterStart.clamp(0, full.length);
       final end = m.chapterEnd.clamp(0, full.length);
       final content = full.substring(start, end);
