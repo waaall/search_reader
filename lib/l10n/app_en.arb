@@ -17,6 +17,23 @@
   },
   "appStartupFailed": "App failed to start",
   "databaseInitializationFailed": "Database initialization failed, so the app cannot be opened right now.",
+  "recoveryInProgress": "Recovering app data; search may be incomplete for now.",
+  "recoverySearchIndexProgress": "Rebuilding search index: {completed}/{total}",
+  "recoverySearchIncomplete": "Indexing failed for {count} chapters; search results may be incomplete.",
+  "recoverySearchMayBeIncomplete": "Some search indexes are still incomplete; search results may be incomplete.",
+  "recoveryIncomplete": "App data recovery did not finish cleanly; some features may be incomplete.",
+  "recoveryFailed": "App data recovery failed; search results may be incomplete.",
+  "@recoverySearchIndexProgress": {
+    "placeholders": {
+      "completed": {"type": "int"},
+      "total": {"type": "int"}
+    }
+  },
+  "@recoverySearchIncomplete": {
+    "placeholders": {
+      "count": {"type": "int"}
+    }
+  },
   "settingsTitle": "Settings",
   "systemSettingsSection": "System settings",
   "displayLanguage": "Display language",

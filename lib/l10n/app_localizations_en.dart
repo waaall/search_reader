@@ -48,6 +48,32 @@ class AppLocalizationsEn extends AppLocalizations {
       'Database initialization failed, so the app cannot be opened right now.';
 
   @override
+  String get recoveryInProgress =>
+      'Recovering app data; search may be incomplete for now.';
+
+  @override
+  String recoverySearchIndexProgress(int completed, int total) {
+    return 'Rebuilding search index: $completed/$total';
+  }
+
+  @override
+  String recoverySearchIncomplete(int count) {
+    return 'Indexing failed for $count chapters; search results may be incomplete.';
+  }
+
+  @override
+  String get recoverySearchMayBeIncomplete =>
+      'Some search indexes are still incomplete; search results may be incomplete.';
+
+  @override
+  String get recoveryIncomplete =>
+      'App data recovery did not finish cleanly; some features may be incomplete.';
+
+  @override
+  String get recoveryFailed =>
+      'App data recovery failed; search results may be incomplete.';
+
+  @override
   String get settingsTitle => 'Settings';
 
   @override

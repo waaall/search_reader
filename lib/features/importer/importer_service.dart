@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:path/path.dart' as p;
 
+import '../../core/db/application_data_operation_coordinator.dart';
 import '../../core/db/daos.dart';
 import '../../core/db/text_index_worker.dart';
 import '../../core/encoding/text_decoder.dart';
@@ -30,6 +31,15 @@ class ImporterService {
   // [externalPath] 来自 file_picker 的原始路径
   // 流程：两种格式都由 worker 生成 UTF-8 正文，随后统一执行索引、原子发布和恢复日志清理。
   Future<ImportResult> importFile(
+    String externalPath, {
+    void Function(ImportPhase phase)? onProgress,
+  }) {
+    return ApplicationDataOperationCoordinator.run(
+      () => _importFile(externalPath, onProgress: onProgress),
+    );
+  }
+
+  Future<ImportResult> _importFile(
     String externalPath, {
     void Function(ImportPhase phase)? onProgress,
   }) async {

@@ -2,6 +2,7 @@
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../core/db/application_data_recovery_provider.dart';
 import '../../core/db/daos.dart';
 import '../../domain/book.dart';
 import '../../domain/reading_progress.dart';
@@ -55,6 +56,10 @@ class LibraryNotifier extends AsyncNotifier<LibraryState> {
   final ImporterService _importer = ImporterService();
   final BookDeletionService _deletionService = BookDeletionService();
 
+  // UI 禁用只是第一道防线，业务入口也要拒绝恢复期间的变更操作。
+  bool get _recoveryRunning =>
+      ref.read(applicationDataRecoveryProvider).isRunning;
+
   @override
   Future<LibraryState> build() async {
     final data = await _loadLibraryData();
@@ -83,12 +88,15 @@ class LibraryNotifier extends AsyncNotifier<LibraryState> {
   //     某些情况下会过度收紧（如 epub 文件被置灰）；用 any 由 Dart 侧自行过滤更稳
   //   - 跨平台行为也更一致
   Future<void> pickAndImport() async {
+    if (_recoveryRunning) return;
+
     final result = await FilePicker.platform.pickFiles(
       type: FileType.any,
       allowMultiple: true,
       withData: false,
     );
     if (result == null || result.files.isEmpty) return;
+    if (_recoveryRunning) return;
 
     final unsupported = <String>[];
     for (final f in result.files) {
@@ -107,6 +115,7 @@ class LibraryNotifier extends AsyncNotifier<LibraryState> {
         );
         continue;
       }
+      if (_recoveryRunning) return;
       await _importOne(path);
     }
     if (unsupported.isNotEmpty) {
@@ -166,6 +175,7 @@ class LibraryNotifier extends AsyncNotifier<LibraryState> {
   }
 
   Future<void> deleteBook(Book book) async {
+    if (_recoveryRunning) return;
     await _deletionService.delete(book);
     await refresh();
   }
@@ -221,6 +231,7 @@ class LibraryNotifier extends AsyncNotifier<LibraryState> {
   // 批量删除选中书籍：循环调用单本删除，结束后统一 refresh
   // 单本失败不阻断其他，错误信息合并展示
   Future<void> deleteSelected() async {
+    if (_recoveryRunning) return;
     final cur = state.value ?? const LibraryState();
     if (cur.selectedIds.isEmpty) return;
     final targets = cur.books

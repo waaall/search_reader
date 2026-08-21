@@ -11,6 +11,7 @@ import '../../shared/navigation/app_routes.dart';
 import '../../shared/theme/app_tokens.dart';
 import '../../shared/widgets/app_animated_switcher.dart';
 import '../reader/reader_page.dart';
+import '../recovery/application_data_recovery_notice.dart';
 import 'search_service.dart';
 
 typedef SearchRunner =
@@ -122,7 +123,12 @@ class _SearchPageState extends ConsumerState<SearchPage> {
           onChanged: _onChanged,
         ),
       ),
-      body: AppAnimatedSwitcher(child: _buildBody()),
+      body: Column(
+        children: [
+          const ApplicationDataRecoveryNotice(),
+          Expanded(child: AppAnimatedSwitcher(child: _buildBody())),
+        ],
+      ),
     );
   }
 

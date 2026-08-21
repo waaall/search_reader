@@ -47,6 +47,28 @@ class AppLocalizationsZh extends AppLocalizations {
   String get databaseInitializationFailed => '数据库初始化失败，暂时无法进入应用。';
 
   @override
+  String get recoveryInProgress => '正在恢复应用数据，搜索功能可能暂时不完整。';
+
+  @override
+  String recoverySearchIndexProgress(int completed, int total) {
+    return '正在补建搜索索引：$completed/$total';
+  }
+
+  @override
+  String recoverySearchIncomplete(int count) {
+    return '有 $count 个章节索引失败，搜索结果可能不完整。';
+  }
+
+  @override
+  String get recoverySearchMayBeIncomplete => '部分搜索索引仍未完成，搜索结果可能不完整。';
+
+  @override
+  String get recoveryIncomplete => '应用数据恢复未完全成功，部分功能可能不完整。';
+
+  @override
+  String get recoveryFailed => '应用数据恢复失败，搜索结果可能不完整。';
+
+  @override
   String get settingsTitle => '设置';
 
   @override

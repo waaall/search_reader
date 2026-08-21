@@ -1,9 +1,9 @@
-// 数据库初始化入口：负责打开数据库、执行版本迁移并在成功后清理孤儿文件。
+// 数据库初始化入口：负责打开数据库并执行版本迁移。
+// 文件对账和 FTS 补建属于可延后的恢复任务，由首帧后的状态控制器负责。
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
-import 'application_data_recovery.dart';
 import 'database_migrations.dart';
 import 'database_schema.dart';
 
@@ -55,9 +55,7 @@ class AppDatabase {
       },
     );
 
-    // 每次启动都恢复未完成导入，并清理崩溃后遗留的坏记录和孤儿文件。
-    await recoverApplicationData(db);
-
+    // 先发布可用的数据库句柄，让界面可以首帧渲染；耗时恢复不能阻塞这里。
     _instance = AppDatabase._(db);
   }
 

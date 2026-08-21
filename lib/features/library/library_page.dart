@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../core/db/application_data_recovery_provider.dart';
 import '../../domain/book.dart';
 import '../../shared/l10n/app_formatters.dart';
 import '../../shared/l10n/app_l10n.dart';
@@ -10,6 +11,7 @@ import '../../shared/theme/app_tokens.dart';
 import '../../shared/widgets/app_animated_switcher.dart';
 import '../bookmarks/all_bookmarks_page.dart';
 import '../reader/reader_page.dart';
+import '../recovery/application_data_recovery_notice.dart';
 import '../search/search_page.dart';
 import '../settings/settings_page.dart';
 import 'library_provider.dart';
@@ -19,6 +21,15 @@ class LibraryPage extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    // 恢复可能发布新书、删除坏书或清理未完成导入；完成后重新读取书架。
+    ref.listen(applicationDataRecoveryProvider, (previous, next) {
+      if (previous?.isRunning == true && !next.isRunning) {
+        ref.invalidate(libraryProvider);
+      }
+    });
+    final recoveryRunning = ref
+        .watch(applicationDataRecoveryProvider)
+        .isRunning;
     final asyncState = ref.watch(libraryProvider);
     // 用 maybeWhen 取出当前状态，只为决定 AppBar / FAB / 返回键行为
     final state = asyncState.value;
@@ -36,21 +47,34 @@ class LibraryPage extends ConsumerWidget {
       },
       child: Scaffold(
         appBar: selectionMode
-            ? _SelectionAppBar(selectedCount: selectedCount)
+            ? _SelectionAppBar(
+                selectedCount: selectedCount,
+                recoveryRunning: recoveryRunning,
+              )
             : _NormalAppBar(),
-        body: AppAnimatedSwitcher(
-          child: asyncState.when(
-            loading: () => const Center(
-              key: ValueKey('library-loading'),
-              child: CircularProgressIndicator(),
+        body: Column(
+          children: [
+            const ApplicationDataRecoveryNotice(),
+            Expanded(
+              child: AppAnimatedSwitcher(
+                child: asyncState.when(
+                  loading: () => const Center(
+                    key: ValueKey('library-loading'),
+                    child: CircularProgressIndicator(),
+                  ),
+                  error: (e, _) => Center(
+                    key: const ValueKey('library-error'),
+                    child: Text(context.l10n.loadLibraryFailed(e)),
+                  ),
+                  data: (state) => _Body(
+                    key: const ValueKey('library-content'),
+                    state: state,
+                    recoveryRunning: recoveryRunning,
+                  ),
+                ),
+              ),
             ),
-            error: (e, _) => Center(
-              key: const ValueKey('library-error'),
-              child: Text(context.l10n.loadLibraryFailed(e)),
-            ),
-            data: (state) =>
-                _Body(key: const ValueKey('library-content'), state: state),
-          ),
+          ],
         ),
         floatingActionButton: AnimatedSwitcher(
           duration: AppMotion.fast,
@@ -66,8 +90,10 @@ class LibraryPage extends ConsumerWidget {
                   key: const ValueKey('import-fab'),
                   icon: const Icon(Icons.add),
                   label: Text(context.l10n.importBooks),
-                  onPressed: () =>
-                      ref.read(libraryProvider.notifier).pickAndImport(),
+                  onPressed: recoveryRunning
+                      ? null
+                      : () =>
+                            ref.read(libraryProvider.notifier).pickAndImport(),
                 ),
         ),
       ),
@@ -112,7 +138,12 @@ class _NormalAppBar extends StatelessWidget implements PreferredSizeWidget {
 // 多选模式 AppBar：取消 / 已选数量 / 全选 / 删除
 class _SelectionAppBar extends ConsumerWidget implements PreferredSizeWidget {
   final int selectedCount;
-  const _SelectionAppBar({required this.selectedCount});
+  final bool recoveryRunning;
+
+  const _SelectionAppBar({
+    required this.selectedCount,
+    required this.recoveryRunning,
+  });
 
   @override
   Size get preferredSize => const Size.fromHeight(kToolbarHeight);
@@ -136,7 +167,7 @@ class _SelectionAppBar extends ConsumerWidget implements PreferredSizeWidget {
         IconButton(
           tooltip: context.l10n.commonDelete,
           icon: const Icon(Icons.delete_outline),
-          onPressed: selectedCount == 0
+          onPressed: selectedCount == 0 || recoveryRunning
               ? null
               : () => _confirmAndDelete(context, ref, selectedCount),
         ),
@@ -174,7 +205,9 @@ class _SelectionAppBar extends ConsumerWidget implements PreferredSizeWidget {
 
 class _Body extends ConsumerWidget {
   final LibraryState state;
-  const _Body({super.key, required this.state});
+  final bool recoveryRunning;
+
+  const _Body({super.key, required this.state, required this.recoveryRunning});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -182,7 +215,9 @@ class _Body extends ConsumerWidget {
       children: [
         if (state.books.isEmpty && state.importing == null)
           _EmptyHint(
-            onImport: () => ref.read(libraryProvider.notifier).pickAndImport(),
+            onImport: recoveryRunning
+                ? null
+                : () => ref.read(libraryProvider.notifier).pickAndImport(),
           )
         else
           ListView.separated(
@@ -201,6 +236,7 @@ class _Body extends ConsumerWidget {
                     progress: state.progressByBookId[book.id]?.fraction ?? 0,
                     selectionMode: state.selectionMode,
                     selected: state.selectedIds.contains(book.id),
+                    recoveryRunning: recoveryRunning,
                   )
                   // 列表项依次淡入上滑；仅前若干项错峰，避免滚到远处时延迟过长
                   .animate(delay: (i < 8 ? 40 * i : 0).ms)
@@ -295,7 +331,7 @@ class _Body extends ConsumerWidget {
 }
 
 class _EmptyHint extends StatelessWidget {
-  final VoidCallback onImport;
+  final VoidCallback? onImport;
 
   const _EmptyHint({required this.onImport});
 
@@ -342,11 +378,14 @@ class _BookTile extends ConsumerWidget {
   final double progress;
   final bool selectionMode;
   final bool selected;
+  final bool recoveryRunning;
+
   const _BookTile({
     required this.book,
     required this.progress,
     required this.selectionMode,
     required this.selected,
+    required this.recoveryRunning,
   });
 
   @override
@@ -508,6 +547,7 @@ class _BookTile extends ConsumerWidget {
                   if (!selectionMode)
                     PopupMenuButton<String>(
                       tooltip: context.l10n.commonDetails,
+                      enabled: !recoveryRunning,
                       padding: EdgeInsets.zero,
                       itemBuilder: (_) => [
                         PopupMenuItem(

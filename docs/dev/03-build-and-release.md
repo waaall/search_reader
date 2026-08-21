@@ -268,6 +268,87 @@ android {
 
 **步骤 4**　在 `android/.gitignore` 追加 `key.properties` 与 `*.jks`。
 
+#### 5.3.1 发布前验证签名
+
+正式签名配置完成后，第一次发布前至少验证一次 APK 的证书。构建成功不代表使用了正确的密钥；如果误用了另一份 keystore，后续也无法覆盖更新同一个应用。
+
+```bash
+flutter clean
+flutter build apk --release
+flutter build appbundle --release
+```
+
+使用 Android SDK 中的 `apksigner` 检查 APK：
+
+```bash
+# 将 <版本> 替换为本机 build-tools 版本，例如 36.0.0
+$ANDROID_HOME/build-tools/<版本>/apksigner verify --print-certs \
+  build/app/outputs/flutter-apk/app-release.apk
+```
+
+输出中应记录并保存：
+
+```text
+Signer #1 certificate DN: ...
+Signer #1 certificate SHA-256 digest: ...
+```
+
+必须确认 DN 不再是 `CN=Android Debug`，并保存 SHA-256 指纹作为以后 CI 校验的期望值。SHA-256 指纹不是私钥，可以安全地放进 CI 配置；keystore、密码和 `key.properties` 不能提交到仓库。
+
+> 如果设备上已经安装了 debug 签名版本，正式签名版本通常不能直接覆盖安装，需要先卸载旧版本。卸载前注意备份应用数据。
+
+#### 5.3.2 CI 强制校验（多人协作或正式发布时建议）
+
+单人只在本机自用时，CI 校验不是构建的硬性要求；但只要涉及换机器、多人协作、应用商店或长期分发，就应把它作为发布门禁。它可以防止以下情况：
+
+- `key.properties` 缺失后意外回退到 debug 签名；
+- CI 使用了错误的 keystore；
+- 构建成功，但生成的 APK 无法覆盖线上版本。
+
+CI 不应从仓库读取密钥，而应通过 Secret 注入以下变量：
+
+```text
+ANDROID_KEYSTORE_BASE64
+ANDROID_KEYSTORE_PASSWORD
+ANDROID_KEY_PASSWORD
+ANDROID_KEY_ALIAS
+ANDROID_RELEASE_CERT_SHA256
+```
+
+以 Linux CI 为例，构建前恢复临时签名材料：
+
+```bash
+printf '%s' "$ANDROID_KEYSTORE_BASE64" \
+  | base64 --decode > "$RUNNER_TEMP/search-reader-upload.jks"
+
+cat > android/key.properties <<EOF
+storePassword=$ANDROID_KEYSTORE_PASSWORD
+keyPassword=$ANDROID_KEY_PASSWORD
+keyAlias=$ANDROID_KEY_ALIAS
+storeFile=$RUNNER_TEMP/search-reader-upload.jks
+EOF
+
+chmod 600 android/key.properties "$RUNNER_TEMP/search-reader-upload.jks"
+trap 'rm -f android/key.properties "$RUNNER_TEMP/search-reader-upload.jks"' EXIT
+
+flutter build appbundle --release
+flutter build apk --release
+```
+
+构建后校验证书指纹，指纹不匹配就让 CI 失败：
+
+```bash
+APKSIGNER="$ANDROID_HOME/build-tools/<版本>/apksigner"
+ACTUAL_SHA256="$($APKSIGNER verify --print-certs \
+  build/app/outputs/flutter-apk/app-release.apk \
+  | awk -F': ' '/SHA-256 digest/ { print $2; exit }')"
+
+test -n "$ACTUAL_SHA256"
+test "$ACTUAL_SHA256" = "$ANDROID_RELEASE_CERT_SHA256"
+```
+
+如果发布到 Google Play，CI 校验的是上传到 Play Console 的 **upload key** 指纹；Google Play App Signing 使用的最终应用签名证书可能不同。详见 [Flutter Android 发布文档](https://docs.flutter.dev/deployment/android) 和 [Android 应用签名文档](https://developer.android.com/studio/publish/app-signing?hl=zh-cn)。
+
 ### 5.4 macOS 签名
 
 自用直接运行 `.app` 即可。要分发给别人且不走 App Store，需要 Apple Developer 账号做 codesign + 公证（notarization），否则对方会被 Gatekeeper 拦截。当前未配置。

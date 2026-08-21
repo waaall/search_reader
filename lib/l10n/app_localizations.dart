@@ -170,6 +170,42 @@ abstract class AppLocalizations {
   /// **'Database initialization failed, so the app cannot be opened right now.'**
   String get databaseInitializationFailed;
 
+  /// No description provided for @recoveryInProgress.
+  ///
+  /// In en, this message translates to:
+  /// **'Recovering app data; search may be incomplete for now.'**
+  String get recoveryInProgress;
+
+  /// No description provided for @recoverySearchIndexProgress.
+  ///
+  /// In en, this message translates to:
+  /// **'Rebuilding search index: {completed}/{total}'**
+  String recoverySearchIndexProgress(int completed, int total);
+
+  /// No description provided for @recoverySearchIncomplete.
+  ///
+  /// In en, this message translates to:
+  /// **'Indexing failed for {count} chapters; search results may be incomplete.'**
+  String recoverySearchIncomplete(int count);
+
+  /// No description provided for @recoverySearchMayBeIncomplete.
+  ///
+  /// In en, this message translates to:
+  /// **'Some search indexes are still incomplete; search results may be incomplete.'**
+  String get recoverySearchMayBeIncomplete;
+
+  /// No description provided for @recoveryIncomplete.
+  ///
+  /// In en, this message translates to:
+  /// **'App data recovery did not finish cleanly; some features may be incomplete.'**
+  String get recoveryIncomplete;
+
+  /// No description provided for @recoveryFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'App data recovery failed; search results may be incomplete.'**
+  String get recoveryFailed;
+
   /// No description provided for @settingsTitle.
   ///
   /// In en, this message translates to:

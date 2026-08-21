@@ -9,7 +9,7 @@ Future<void> main() async {
   // 初始化 Flutter 绑定（数据库、path_provider 都依赖这个）
   WidgetsFlutterBinding.ensureInitialized();
   try {
-    // 数据库初始化（全平台 ffi + 自带 SQLite）
+    // 只打开数据库并执行迁移；章节级恢复在首帧后后台执行，避免启动白屏。
     await AppDatabase.init();
     runApp(const ProviderScope(child: SearchReaderApp()));
   } catch (e, st) {

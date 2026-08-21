@@ -401,6 +401,30 @@ void main() {
     expect(matches, hasLength(1));
   });
 
+  test('单章 FTS 修复失败时返回可展示的搜索不完整状态', () async {
+    final pending = await _createPendingImport(
+      title: '部分索引失败',
+      content: _content,
+      storage: storage,
+      importDao: importDao,
+    );
+    final staged = pending.staged;
+    final book = pending.book;
+    await storage.finalizeStagedFile(staged);
+    await importDao.markImportComplete(book.id);
+    await database.delete('chapters_fts');
+
+    final report = await recoverApplicationData(
+      database,
+      storage: _FailingReadStorage(rootProvider: () async => tempDirectory),
+    );
+
+    expect(report.searchMayBeIncomplete, isTrue);
+    expect(report.failedChapterCount, 1);
+    expect(report.issues.single.chapterId, isNotNull);
+    expect(await database.query('chapters_fts'), isEmpty);
+  });
+
   test('数据库删除成功后文件失败不误报，并由启动清理重试', () async {
     final pending = await _createPendingImport(
       title: '待删除',
@@ -491,5 +515,18 @@ class _UnavailableInspectionStorage extends BookStorage {
   @override
   Future<BookFileAvailability> inspectAvailability(String relativePath) async {
     return BookFileAvailability.unavailable;
+  }
+}
+
+class _FailingReadStorage extends BookStorage {
+  _FailingReadStorage({required super.rootProvider});
+
+  @override
+  Future<String> readTextRange(
+    String relativePath, {
+    required int startByte,
+    required int endByte,
+  }) {
+    return Future<String>.error(const FileSystemException('模拟章节读取失败'));
   }
 }
