@@ -1,13 +1,14 @@
 // EPUB 解析器：只读取章节 HTML，忽略图片、字体等阅读器不需要的二进制资源。
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:archive/archive_io.dart';
-import 'package:epubx/epubx.dart';
 import 'package:html/dom.dart' as html_dom;
 import 'package:html/parser.dart' as html_parser;
 import 'package:path/path.dart' as p;
 
 import 'book_format.dart';
+import 'epub_structure.dart';
 import 'import_limits.dart';
 import 'normalized_text_writer.dart';
 
@@ -21,20 +22,21 @@ class EpubParseException implements Exception {
 }
 
 class EpubParser implements BookFormatParser {
+  static const _structureReader = EpubStructureReader();
+
   @override
   Future<ParsedBook> parse(String filePath) async {
     final bytes = await _readEpubBytes(filePath, limits: ImportLimits.defaults);
     try {
-      // openBook 只建立 EPUB 目录和章节引用，不读取图片、字体和所有正文。
-      final book = await EpubReader.openBook(bytes);
-      final rawChapters = await book.getChapters();
+      final archive = ZipDecoder().decodeBytes(bytes);
+      final sources = _structureReader.read(archive);
       final buffer = StringBuffer();
       final result = <ParsedChapter>[];
 
-      for (var i = 0; i < rawChapters.length; i++) {
-        final chapter = rawChapters[i];
-        final title = _normalizeTitle(chapter.Title, fallbackIndex: i);
-        final content = await _readChapterText(chapter);
+      for (var i = 0; i < sources.length; i++) {
+        final rendered = _renderChapter(sources[i], i);
+        final title = rendered.title;
+        final content = rendered.content;
         if (buffer.isNotEmpty) buffer.write('\n\n');
 
         final startChar = buffer.length;
@@ -85,15 +87,14 @@ class EpubParser implements BookFormatParser {
     final writer = await NormalizedTextWriter.open(outputPath);
     var closed = false;
     try {
-      final book = await EpubReader.openBook(bytes);
-      final rawChapters = await book.getChapters();
+      final archive = ZipDecoder().decodeBytes(bytes);
+      final sources = _structureReader.read(archive);
       final descriptors = <ChapterDescriptor>[];
 
-      for (var i = 0; i < rawChapters.length; i++) {
-        final chapter = rawChapters[i];
-        _checkChapterSourceSize(chapter, limits);
-        final title = _normalizeTitle(chapter.Title, fallbackIndex: i);
-        final content = await _readChapterText(chapter);
+      for (var i = 0; i < sources.length; i++) {
+        final rendered = _renderChapter(sources[i], i, limits: limits);
+        final title = rendered.title;
+        final content = rendered.content;
 
         if (writer.charCount > 0) await writer.write('\n\n');
         final startChar = writer.charCount;
@@ -149,6 +150,25 @@ class EpubParser implements BookFormatParser {
     return title;
   }
 
+  _RenderedChapter _renderChapter(
+    EpubChapterSource source,
+    int index, {
+    ImportLimits limits = ImportLimits.defaults,
+  }) {
+    try {
+      _checkChapterSourceSize(source.file, limits);
+      final html = utf8.decode(source.file.content, allowMalformed: true);
+      final title = _normalizeTitle(
+        source.navigationTitle ?? _htmlTitle(html),
+        fallbackIndex: index,
+      );
+      return _RenderedChapter(title: title, content: _htmlToPlainText(html));
+    } catch (error) {
+      if (error is EpubParseException) rethrow;
+      throw EpubParseException('读取 EPUB 章节失败：${source.file.name}：$error');
+    }
+  }
+
   static const _blockTags = {
     'p',
     'div',
@@ -180,19 +200,28 @@ class EpubParser implements BookFormatParser {
         .trim();
   }
 
-  Future<String> _readChapterText(EpubChapterRef chapter) async {
-    try {
-      return _htmlToPlainText(await chapter.readHtmlContent());
-    } catch (e) {
-      throw EpubParseException('读取 EPUB 章节失败：$e');
+  String? _htmlTitle(String html) {
+    if (html.trim().isEmpty) return null;
+    final doc = html_parser.parse(html);
+    for (final selector in const [
+      'title',
+      'h1',
+      'h2',
+      'h3',
+      'h4',
+      'h5',
+      'h6',
+    ]) {
+      final title = doc.querySelector(selector)?.text.trim();
+      if (title != null && title.isNotEmpty) return title;
     }
+    return null;
   }
 
-  void _checkChapterSourceSize(EpubChapterRef chapter, ImportLimits limits) {
-    final size = chapter.epubTextContentFileRef?.getContentFileEntry().size;
-    if (size != null && size > limits.maxEpubChapterSourceBytes) {
+  void _checkChapterSourceSize(ArchiveFile file, ImportLimits limits) {
+    if (file.size > limits.maxEpubChapterSourceBytes) {
       throw EpubParseException(
-        'EPUB 单章源文件超过允许大小：$size > ${limits.maxEpubChapterSourceBytes}',
+        'EPUB 单章源文件超过允许大小：${file.size} > ${limits.maxEpubChapterSourceBytes}',
       );
     }
   }
@@ -299,4 +328,11 @@ class EpubParser implements BookFormatParser {
       } catch (_) {}
     }
   }
+}
+
+class _RenderedChapter {
+  final String title;
+  final String content;
+
+  const _RenderedChapter({required this.title, required this.content});
 }
