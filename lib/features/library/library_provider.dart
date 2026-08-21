@@ -99,7 +99,7 @@ class LibraryNotifier extends AsyncNotifier<LibraryState> {
         continue;
       }
       if (!await isWithinSizeLimit(path)) {
-        // txt 限 10MB，epub 限 50MB（含图片资源）
+        // 当前 txt 与 EPUB 都限制为 10 MiB；EPUB 资源不会参与正文导入。
         state = AsyncData(
           (state.value ?? const LibraryState()).copyWith(
             error: FileTooLargeError(f.name),

@@ -2,7 +2,8 @@
 
 class ImportLimits {
   static const defaultMaxTxtBytes = 10 * 1024 * 1024;
-  static const defaultMaxEpubBytes = 50 * 1024 * 1024;
+  // 当前阅读器只提取 EPUB 正文，默认将打包文件大小限制为 10 MiB。
+  static const defaultMaxEpubBytes = 10 * 1024 * 1024;
   static const defaultMaxEpubDirectoryEntries = 10000;
   static const defaultMaxEpubDirectoryBytes = 200 * 1024 * 1024;
   static const defaultMaxEpubChapterSourceBytes = 16 * 1024 * 1024;
