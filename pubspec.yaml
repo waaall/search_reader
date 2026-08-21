@@ -48,6 +48,10 @@ dev_dependencies:
     sdk: flutter
   flutter_lints: ^6.0.0
 
+# 暂时固定到回退实现，避开 2.6.0 在 macOS 上加载 objective_c 原生库的路径问题。
+dependency_overrides:
+  path_provider_foundation: 2.5.1
+
 flutter:
   generate: true
   uses-material-design: true
