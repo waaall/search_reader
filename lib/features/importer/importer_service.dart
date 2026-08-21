@@ -4,49 +4,31 @@ import 'dart:io';
 import 'package:path/path.dart' as p;
 
 import '../../core/db/daos.dart';
+import '../../core/db/text_index_worker.dart';
 import '../../core/encoding/text_decoder.dart';
-import '../../core/parser/book_format.dart';
-import '../../core/parser/epub_parser.dart';
-import '../../core/parser/txt_parser.dart';
+import '../../core/parser/book_import_worker.dart';
+import '../../core/parser/import_limits.dart';
 import '../../core/storage/book_storage.dart';
+import '../../domain/book.dart';
 import 'import_progress.dart';
 
-// 导入流程编排：根据格式分发 parser → 持久化文本到沙盒 → 写入数据库 + FTS5 索引
+// 导入流程编排：worker 解析正文 → 暂存规范化文本 → 写入数据库和全文索引。
 class ImporterService {
   ImporterService({
-    TxtParser? txtParser,
-    EpubParser? epubParser,
     BookImportDao? importDao,
     BookStorage? storage,
-  }) : _txtParser = txtParser ?? TxtParser(),
-       _epubParser = epubParser ?? EpubParser(),
-       _importDao = importDao ?? BookImportDao(),
-       _storage = storage ?? BookStorage.shared;
+    ImportLimits? limits,
+  }) : _importDao = importDao ?? BookImportDao(),
+       _storage = storage ?? BookStorage.shared,
+       _limits = limits ?? ImportLimits.defaults;
 
-  final TxtParser _txtParser;
-  final EpubParser _epubParser;
   final BookImportDao _importDao;
   final BookStorage _storage;
-
-  // 按扩展名选择 parser；不支持的格式抛 ImportException
-  BookFormatParser _pickParser(String path) {
-    final ext = p.extension(path).toLowerCase();
-    switch (ext) {
-      case '.txt':
-        return _txtParser;
-      case '.epub':
-        return _epubParser;
-      default:
-        throw ImportException.unsupportedFormat(ext);
-    }
-  }
+  final ImportLimits _limits;
 
   // 导入单个文件
   // [externalPath] 来自 file_picker 的原始路径
-  // 流程：
-  //   - txt：解析源文件 → 临时区复制原始字节，保留编码
-  //   - epub：解析源文件 → 临时区写入抽取后的 utf-8 纯文本
-  //   - 两者随后统一执行数据库事务、原子 rename 和恢复日志清理
+  // 流程：两种格式都由 worker 生成 UTF-8 正文，随后统一执行索引、原子发布和恢复日志清理。
   Future<ImportResult> importFile(
     String externalPath, {
     void Function(ImportPhase phase)? onProgress,
@@ -55,27 +37,44 @@ class ImporterService {
     StagedBookFile? stagedFile;
     int? pendingBookId;
     try {
-      final parser = _pickParser(externalPath);
+      if (!isSupportedBookFile(externalPath)) {
+        throw ImportException.unsupportedFormat(ext);
+      }
 
       onProgress?.call(ImportPhase.parsing);
-      // 先解析外部源文件，成功后才向沙盒临时区写入，减少无效文件。
-      final parsed = await parser.parse(externalPath);
-
-      onProgress?.call(ImportPhase.copying);
-      if (ext == '.epub') {
-        stagedFile = await _storage.stageTextFile(parsed.fullText);
-      } else {
-        stagedFile = await _storage.stageExternalFile(externalPath);
-      }
+      // 先分配临时正文路径，再由 worker 在后台 isolate 中解析并写入 UTF-8。
+      stagedFile = await _storage.allocateNormalizedStagedFile();
+      final stagedAbsolute = await _storage.resolveAbsolute(
+        stagedFile.stagedPath,
+      );
+      final manifest = await BookImportWorker.run(
+        inputPath: externalPath,
+        outputPath: stagedAbsolute,
+        extension: ext,
+        limits: _limits,
+      );
 
       onProgress?.call(ImportPhase.indexing);
       final title = _titleFromPath(externalPath);
-      final book = await _importDao.createPendingImport(
-        title: title,
-        stagedPath: stagedFile.stagedPath,
-        targetPath: stagedFile.targetPath,
-        parsed: parsed,
-      );
+      final indexWorker = TextIndexWorker();
+      late final Book book;
+      try {
+        book = await _importDao.createPendingImportFromManifest(
+          title: title,
+          stagedPath: stagedFile.stagedPath,
+          targetPath: stagedFile.targetPath,
+          manifest: manifest,
+          readChapter: (chapter) => _storage.readTextRange(
+            stagedFile!.stagedPath,
+            startByte: chapter.startByte,
+            endByte: chapter.endByte,
+          ),
+          buildIndex: (title, content) =>
+              indexWorker.tokenize(title: title, content: content),
+        );
+      } finally {
+        await indexWorker.close();
+      }
       pendingBookId = book.id;
 
       // 数据库事务提交后再原子发布文件，最后删除恢复日志使书籍对查询可见。
@@ -86,8 +85,8 @@ class ImporterService {
       return ImportResult(
         bookId: book.id,
         title: book.title,
-        chapterCount: parsed.chapters.length,
-        totalChars: parsed.totalChars,
+        chapterCount: manifest.chapters.length,
+        totalChars: manifest.totalChars,
       );
     } on DecodingException catch (e) {
       await _rollback(stagedFile, pendingBookId);
@@ -135,9 +134,9 @@ bool isSupportedBookFile(String path) {
 }
 
 // 校验文件大小是否在合理范围
-// txt 上限 10MB；epub 含图片资源通常更大，上限 50MB
-const int kMaxTxtBytes = 10 * 1024 * 1024;
-const int kMaxEpubBytes = 50 * 1024 * 1024;
+// 对外保留旧常量名称，实际策略统一由 ImportLimits 管理。
+const int kMaxTxtBytes = ImportLimits.defaultMaxTxtBytes;
+const int kMaxEpubBytes = ImportLimits.defaultMaxEpubBytes;
 
 // 取文件大小失败时（沙盒权限边界、路径异常等）不在这一步拦截
 // 让导入流程自己暴露真实错误，避免把"读不到"误报为"超大"
@@ -145,7 +144,7 @@ Future<bool> isWithinSizeLimit(String path) async {
   try {
     final len = await File(path).length();
     final ext = p.extension(path).toLowerCase();
-    final limit = ext == '.epub' ? kMaxEpubBytes : kMaxTxtBytes;
+    final limit = ImportLimits.defaults.limitForExtension(ext);
     return len <= limit;
   } catch (_) {
     return true;

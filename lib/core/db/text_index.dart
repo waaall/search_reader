@@ -137,26 +137,36 @@ String _ellipsisHead(String text, int len) {
   return '${text.substring(0, len)}...';
 }
 
-// 在原文中定位关键词，返回章节内字符偏移，供搜索结果跳转到命中位置
-// 与 makeSnippet 不同：makeSnippet 在归一化文本上找位置只为展示片段，
-// 这里必须用原文偏移——reader 的章节文本与字符偏移都基于沙盒全文切片
-// 多关键词时优先用最长的；都没找到时返回 0（落到章节开头）
-int findMatchOffset(String content, String rawQuery) {
-  if (rawQuery.trim().isEmpty) return 0;
+class TextMatch {
+  final int offset;
+  final int length;
+
+  const TextMatch({required this.offset, required this.length});
+}
+
+// 在原文中定位关键词，供摘要截取和阅读器跳转共用。
+// 多关键词时优先用最长的；找不到时返回 null，调用方再决定是否落到章节开头。
+TextMatch? findTextMatch(String content, String rawQuery) {
+  if (rawQuery.trim().isEmpty) return null;
   final candidates =
       rawQuery.split(RegExp(r'\s+')).where((g) => g.isNotEmpty).toList()
         ..sort((a, b) => b.length.compareTo(a.length));
-  if (candidates.isEmpty) return 0;
+  if (candidates.isEmpty) return null;
 
   for (final kw in candidates) {
     final idx = content.indexOf(kw);
-    if (idx >= 0) return idx;
+    if (idx >= 0) return TextMatch(offset: idx, length: kw.length);
   }
   // 整词未连续出现（FTS 按 bigram AND 命中可能有误差），退化用第一个 bigram 定位
   final firstKw = candidates.first;
   if (firstKw.length >= _bigramSize) {
     final idx = content.indexOf(firstKw.substring(0, _bigramSize));
-    if (idx >= 0) return idx;
+    if (idx >= 0) return TextMatch(offset: idx, length: _bigramSize);
   }
-  return 0;
+  return null;
+}
+
+// 保留原有 API：找不到时返回 0，兼容阅读跳转和已有调用方。
+int findMatchOffset(String content, String rawQuery) {
+  return findTextMatch(content, rawQuery)?.offset ?? 0;
 }

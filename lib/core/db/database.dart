@@ -50,7 +50,7 @@ class AppDatabase {
         await DatabaseSchema.create(db);
       },
       onUpgrade: (db, oldV, newV) async {
-        // sqflite 会在事务中执行回调；任一步失败都会回滚且不会提升版本号。
+        // v1 之后只执行登记过的增量迁移；sqflite 会在事务中执行回调。
         await migrateDatabase(db, oldV, newV);
       },
     );

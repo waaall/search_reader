@@ -51,9 +51,6 @@ class ReaderNotifier extends AutoDisposeFamilyAsyncNotifier<ReaderState, int> {
   final ChapterDao _chapterDao = ChapterDao();
   final ProgressDao _progressDao = ProgressDao();
 
-  // 全文缓存：避免每次切章重新读盘解码
-  String? _fullText;
-
   // 阅读进度写入队列：翻页、跳章、退出阅读页可能连续触发保存。
   // 串行化写库可避免较早的异步 save 后完成，反向覆盖较新的阅读位置。
   Future<void> _progressSaveQueue = Future.value();
@@ -74,8 +71,7 @@ class ReaderNotifier extends AutoDisposeFamilyAsyncNotifier<ReaderState, int> {
       chapters.length - 1,
     );
 
-    await _ensureFullText(book);
-    final text = _sliceChapter(chapters[initialIndex]);
+    final text = await _readChapter(book, chapters[initialIndex]);
 
     // 更新最近阅读时间（不阻塞返回）
     await _bookDao.updateLastRead(bookId);
@@ -94,8 +90,7 @@ class ReaderNotifier extends AutoDisposeFamilyAsyncNotifier<ReaderState, int> {
     final cur = state.value;
     if (cur == null) return;
     final clamped = chapterIndex.clamp(0, cur.chapters.length - 1);
-    await _ensureFullText(cur.book);
-    final text = _sliceChapter(cur.chapters[clamped]);
+    final text = await _readChapter(cur.book, cur.chapters[clamped]);
     state = AsyncData(
       cur.copyWith(
         currentChapterIndex: clamped,
@@ -160,18 +155,15 @@ class ReaderNotifier extends AutoDisposeFamilyAsyncNotifier<ReaderState, int> {
     return save;
   }
 
-  // 读全文（带缓存）
-  Future<void> _ensureFullText(Book book) async {
-    if (_fullText != null) return;
-    _fullText = await BookStorage.shared.readFullText(book.filePath);
-  }
-
-  // 按章节起止位置截取文本
-  String _sliceChapter(Chapter chapter) {
-    final full = _fullText!;
-    final start = chapter.startChar.clamp(0, full.length);
-    final end = chapter.endChar.clamp(0, full.length);
-    return full.substring(start, end);
+  // 阅读器只加载当前章节；当前数据库中的章节都带有有效 UTF-8 字节范围。
+  Future<String> _readChapter(Book book, Chapter chapter) {
+    return BookStorage.shared.readChapterText(
+      book.filePath,
+      startChar: chapter.startChar,
+      endChar: chapter.endChar,
+      startByte: chapter.startByte,
+      endByte: chapter.endByte,
+    );
   }
 }
 

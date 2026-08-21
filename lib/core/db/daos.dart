@@ -9,6 +9,7 @@ import '../parser/book_format.dart';
 import 'database.dart';
 import 'database_operations.dart';
 import 'text_index.dart';
+import 'text_index_worker.dart';
 
 // 数据访问层：每个表一个 DAO 类
 // 所有 DAO 共享同一个 Database 单例
@@ -70,13 +71,24 @@ class BookImportDao {
   final Database? _database;
   Database get _db => _database ?? AppDatabase.instance.db;
 
-  // books、chapters、FTS 和恢复日志必须在同一事务内提交。
-  Future<Book> createPendingImport({
+  Future<void> markImportComplete(int bookId) async {
+    await _db.delete('import_jobs', where: 'book_id = ?', whereArgs: [bookId]);
+  }
+
+  Future<void> cancelPendingImport(int bookId) async {
+    await deleteBookRecords(_db, bookId);
+  }
+
+  // 新导入使用章节描述和按章读取回调，事务内只保留当前章节正文和 token。
+  Future<Book> createPendingImportFromManifest({
     required String title,
     String? author,
     required String stagedPath,
     required String targetPath,
-    required ParsedBook parsed,
+    required BookImportManifest manifest,
+    required Future<String> Function(ChapterDescriptor chapter) readChapter,
+    Future<ChapterIndexTokens> Function(String title, String content)?
+    buildIndex,
   }) async {
     final now = DateTime.now();
     final id = await _db.transaction((txn) async {
@@ -84,25 +96,34 @@ class BookImportDao {
         'title': title,
         'author': author,
         'file_path': targetPath,
-        'encoding': parsed.encoding,
-        'total_chars': parsed.totalChars,
+        'encoding': manifest.encoding,
+        'total_chars': manifest.totalChars,
         'created_at': now.millisecondsSinceEpoch,
         'last_read_at': null,
       });
 
-      for (var index = 0; index < parsed.chapters.length; index++) {
-        final chapter = parsed.chapters[index];
+      for (var index = 0; index < manifest.chapters.length; index++) {
+        final chapter = manifest.chapters[index];
         final chapterId = await txn.insert('chapters', {
           'book_id': bookId,
           'chapter_index': index,
           'title': chapter.title,
           'start_char': chapter.startChar,
           'end_char': chapter.endChar,
+          'start_byte': chapter.startByte,
+          'end_byte': chapter.endByte,
         });
+        final content = await readChapter(chapter);
+        final tokens = buildIndex == null
+            ? ChapterIndexTokens(
+                title: toBigramTokens(chapter.title),
+                search: toBigramTokens(content),
+              )
+            : await buildIndex(chapter.title, content);
         await txn.insert('chapters_fts', {
           'rowid': chapterId,
-          'title': toBigramTokens(chapter.title),
-          'search': toBigramTokens(chapter.content),
+          'title': tokens.title,
+          'search': tokens.search,
         });
       }
 
@@ -121,18 +142,10 @@ class BookImportDao {
       title: title,
       author: author,
       filePath: targetPath,
-      encoding: parsed.encoding,
-      totalChars: parsed.totalChars,
+      encoding: manifest.encoding,
+      totalChars: manifest.totalChars,
       createdAt: now,
     );
-  }
-
-  Future<void> markImportComplete(int bookId) async {
-    await _db.delete('import_jobs', where: 'book_id = ?', whereArgs: [bookId]);
-  }
-
-  Future<void> cancelPendingImport(int bookId) async {
-    await deleteBookRecords(_db, bookId);
   }
 }
 
@@ -376,6 +389,8 @@ class ChapterMatchRow {
   final String chapterTitle;
   final int chapterStart;
   final int chapterEnd;
+  final int chapterStartByte;
+  final int chapterEndByte;
 
   const ChapterMatchRow({
     required this.bookId,
@@ -386,17 +401,26 @@ class ChapterMatchRow {
     required this.chapterTitle,
     required this.chapterStart,
     required this.chapterEnd,
+    required this.chapterStartByte,
+    required this.chapterEndByte,
   });
 }
 
 class SearchDao {
-  Database get _db => AppDatabase.instance.db;
+  SearchDao({Database? database}) : _database = database;
+
+  final Database? _database;
+  Database get _db => _database ?? AppDatabase.instance.db;
 
   // 跨书全文搜索：返回命中行的元信息 + 起止位置 + 文件路径，最多 100 条
   // [ftsQuery] 已 bigram 化的 FTS5 MATCH 表达式
   // 沙盒文件读取与 snippet 生成交给 SearchService，DAO 层不做文件 I/O
-  Future<List<ChapterMatchRow>> queryMatches(String ftsQuery) async {
+  Future<List<ChapterMatchRow>> queryMatches(
+    String ftsQuery, {
+    int limit = 100,
+  }) async {
     if (ftsQuery.trim().isEmpty) return const [];
+    if (limit <= 0) return const [];
     final rows = await _db.rawQuery(
       '''
       SELECT
@@ -407,7 +431,9 @@ class SearchDao {
         c.chapter_index AS chapter_index,
         c.title AS chapter_title,
         c.start_char AS chapter_start,
-        c.end_char AS chapter_end
+        c.end_char AS chapter_end,
+        c.start_byte AS chapter_start_byte,
+        c.end_byte AS chapter_end_byte
       FROM chapters_fts
       JOIN chapters c ON chapters_fts.rowid = c.id
       JOIN books b ON c.book_id = b.id
@@ -416,9 +442,9 @@ class SearchDao {
           SELECT 1 FROM import_jobs job WHERE job.book_id = b.id
         )
       ORDER BY rank
-      LIMIT 100
+      LIMIT ?
       ''',
-      [ftsQuery],
+      [ftsQuery, limit],
     );
     return rows
         .map(
@@ -431,6 +457,8 @@ class SearchDao {
             chapterTitle: r['chapter_title'] as String,
             chapterStart: r['chapter_start'] as int,
             chapterEnd: r['chapter_end'] as int,
+            chapterStartByte: r['chapter_start_byte']! as int,
+            chapterEndByte: r['chapter_end_byte']! as int,
           ),
         )
         .toList();

@@ -156,6 +156,8 @@ CREATE TABLE chapters (
   title TEXT NOT NULL,
   start_char INTEGER NOT NULL,     -- 在全书纯文本中的起始字符位置
   end_char INTEGER NOT NULL,       -- 在全书纯文本中的结束字符位置
+  start_byte INTEGER NOT NULL,     -- 规范化 UTF-8 文件中的起始字节位置
+  end_byte INTEGER NOT NULL,       -- 规范化 UTF-8 文件中的结束字节位置
   FOREIGN KEY (book_id) REFERENCES books(id) ON DELETE CASCADE
 );
 CREATE INDEX idx_chapters_book ON chapters(book_id, chapter_index);
@@ -210,7 +212,7 @@ CREATE TABLE import_jobs (
 
 **Schema 设计要点**：
 
-- 阅读器正文与搜索 snippet 都按起止位置从沙盒文件切片（`BookStorage.readFullText`），避免在数据库里再保留一整份书。
+- 规范化后的正文以 UTF-8 保存在沙盒文件中；阅读器正文与搜索 snippet 都按起止位置从文件切片（`BookStorage.readTextRange`），避免在数据库里再保留一整份书。
 - FTS5 用 **unicode61 + Dart 侧 bigram 化**：原文 `你好世界` → 索引序列 `你好 好世 世界`，每个 bigram 作为完整 token。
 - 查询同样 bigram 化 + 紧邻短语：`你好世` → `("你好" + "好世")`，等价于原文连续出现 `你好世`。
 - `bookmarks` 通过 `(book_id, chapter_index, char_offset)` 唯一约束去重；重复加书签时覆盖 note / created_at。
@@ -405,13 +407,13 @@ LIMIT 100;
 导入流程：
 1. file_picker 拿到原文件路径（Android 走 SAF，桌面端为绝对路径）
 2. 解析成功后写入 appDocs/books/.staging/{uuid}.<ext>.pending，并刷新文件
-   - txt：原文件 copy，保留原编码（reader 读盘时再解码）
+   - txt：解析并转换为规范化 UTF-8 文本后写入
    - epub：解析后只把抽取出的纯文本以 utf-8 .txt 写入（原 epub 不落盘）
 3. 同一 SQLite 事务写入 books、chapters、chapters_fts 与 import_jobs
 4. 事务提交后，通过同一卷内 rename 把临时文件原子发布到 books/{uuid}.<ext>
 5. 删除 import_jobs 记录，书籍才对书架与搜索查询可见
 6. 数据库 books.file_path 存正式文件的相对路径（不存绝对路径，避免沙盒迁移失效）
-7. `readFullText(relativePath)` 统一负责读取、编码检测、换行归一化；Reader 与 Search 共用，保证章节起止位置、搜索跳转 offset、书签 offset 的坐标一致
+7. `readTextRange(relativePath, startByte, endByte)` 按规范化 UTF-8 字节范围读取；Reader 与 Search 共用，保证章节起止位置、搜索跳转 offset、书签 offset 的坐标一致
 ```
 
 崩溃恢复与删除：
@@ -423,9 +425,9 @@ LIMIT 100;
 
 数据库迁移清理：
 
-- `database_migrations.dart` 为每个目标版本注册独立的增量迁移，禁止升级时整体删除业务表。
+- 当前结构作为正式数据库 v1 基线；首发前的开发数据库不属于需要兼容的发布版本，首发前应清理应用数据或删除旧的 `search_reader.db`。
+- v1 之后，`database_migrations.dart` 为每个目标版本注册独立的增量迁移，禁止升级时整体删除业务表。
 - sqflite 在事务内执行 `onUpgrade`；迁移失败会回滚，数据库版本不会提升。
-- v1 → v2 重建 bigram FTS，v2 → v3 新增书签，v3 → v4 重建 `chapters`，v4 → v5 新增导入恢复日志，其余用户数据保持不变。
 - 每次启动都由 `recoverApplicationData()` 对账数据库与沙盒文件；文件清理失败不影响数据库和应用启动。
 
 ### 5.8 主题、设计 token 与动效（shared/theme）

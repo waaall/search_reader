@@ -3,7 +3,7 @@ import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 import '../storage/book_storage.dart';
 import 'database_operations.dart';
-import 'text_index.dart';
+import 'text_index_worker.dart';
 
 Future<void> recoverApplicationData(Database db, {BookStorage? storage}) async {
   final bookStorage = storage ?? BookStorage.shared;
@@ -96,14 +96,13 @@ Future<void> _repairFtsIndex(Database db, BookStorage storage) async {
     );
   }
 
-  // 缺失索引可以从正式书籍文件按章节字符范围重新构建。
+  // 缺失索引只能从规范化 UTF-8 文件的章节字节范围重新构建。
   final missingRows = await db.rawQuery('''
     SELECT
       c.id,
       c.title,
-      c.start_char,
-      c.end_char,
-      b.id AS book_id,
+      c.start_byte,
+      c.end_byte,
       b.file_path
     FROM chapters c
     JOIN books b ON b.id = c.book_id
@@ -114,24 +113,32 @@ Future<void> _repairFtsIndex(Database db, BookStorage storage) async {
       )
     ORDER BY b.id, c.chapter_index
   ''');
-  final textCache = <int, String>{};
-  for (final row in missingRows) {
-    try {
-      final bookId = row['book_id'] as int;
-      final fullText = textCache[bookId] ??= await storage.readFullText(
-        row['file_path'] as String,
-      );
-      final start = (row['start_char'] as int).clamp(0, fullText.length);
-      final end = (row['end_char'] as int).clamp(start, fullText.length);
-      final content = fullText.substring(start, end);
-      await db.insert('chapters_fts', {
-        'rowid': row['id'],
-        'title': toBigramTokens(row['title'] as String),
-        'search': toBigramTokens(content),
-      });
-    } catch (_) {
-      // 单章修复失败不阻止启动；下次启动仍会再次检测并尝试重建。
+  final indexWorker = TextIndexWorker();
+  try {
+    for (final row in missingRows) {
+      try {
+        final startByte = row['start_byte'] as int;
+        final endByte = row['end_byte'] as int;
+        final content = await storage.readTextRange(
+          row['file_path'] as String,
+          startByte: startByte,
+          endByte: endByte,
+        );
+        final tokens = await indexWorker.tokenize(
+          title: row['title'] as String,
+          content: content,
+        );
+        await db.insert('chapters_fts', {
+          'rowid': row['id'],
+          'title': tokens.title,
+          'search': tokens.search,
+        });
+      } catch (_) {
+        // 单章修复失败不阻止启动；下次启动仍会再次检测并尝试重建。
+      }
     }
+  } finally {
+    await indexWorker.close();
   }
 }
 

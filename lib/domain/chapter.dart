@@ -9,6 +9,8 @@ class Chapter {
   final String title;
   final int startChar; // 在原文中的起始字符位置（含）
   final int endChar; // 在原文中的结束字符位置（不含）
+  final int startByte; // 规范化 UTF-8 文件中的起始字节位置
+  final int endByte; // 规范化 UTF-8 文件中的结束字节位置
 
   const Chapter({
     required this.id,
@@ -17,18 +19,22 @@ class Chapter {
     required this.title,
     required this.startChar,
     required this.endChar,
+    required this.startByte,
+    required this.endByte,
   });
 
   int get charCount => endChar - startChar;
 
   Map<String, Object?> toRow() => {
-        'id': id,
-        'book_id': bookId,
-        'chapter_index': chapterIndex,
-        'title': title,
-        'start_char': startChar,
-        'end_char': endChar,
-      };
+    'id': id,
+    'book_id': bookId,
+    'chapter_index': chapterIndex,
+    'title': title,
+    'start_char': startChar,
+    'end_char': endChar,
+    'start_byte': startByte,
+    'end_byte': endByte,
+  };
 
   factory Chapter.fromRow(Map<String, Object?> row) {
     return Chapter(
@@ -38,6 +44,8 @@ class Chapter {
       title: row['title'] as String,
       startChar: row['start_char'] as int,
       endChar: row['end_char'] as int,
+      startByte: row['start_byte']! as int,
+      endByte: row['end_byte']! as int,
     );
   }
 }

@@ -1,5 +1,6 @@
 // 导入崩溃一致性测试：验证数据库原子提交、临时文件发布和启动恢复。
 import 'dart:io';
+import 'dart:convert';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:path/path.dart' as p;
@@ -9,7 +10,10 @@ import 'package:search_reader/core/db/database_schema.dart';
 import 'package:search_reader/core/db/text_index.dart';
 import 'package:search_reader/core/parser/book_format.dart';
 import 'package:search_reader/core/storage/book_storage.dart';
+import 'package:search_reader/domain/book.dart';
 import 'package:search_reader/features/library/book_deletion_service.dart';
+import 'package:search_reader/features/importer/importer_service.dart';
+import 'package:search_reader/features/search/search_service.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 const _content = '第一章\n你好世界';
@@ -44,13 +48,14 @@ void main() {
   });
 
   test('书籍、章节、FTS 和导入日志在同一事务内提交', () async {
-    final staged = await storage.stageTextFile(_content);
-    final book = await importDao.createPendingImport(
+    final pending = await _createPendingImport(
       title: '测试书籍',
-      stagedPath: staged.stagedPath,
-      targetPath: staged.targetPath,
-      parsed: _parsedBook(),
+      content: _content,
+      storage: storage,
+      importDao: importDao,
     );
+    final staged = pending.staged;
+    final book = pending.book;
 
     expect(await database.query('books'), hasLength(1));
     expect(await database.query('chapters'), hasLength(1));
@@ -66,16 +71,106 @@ void main() {
     expect(await BookDao(database: database).listAll(), hasLength(1));
   });
 
+  test('规范化正文导入保存字节范围并保持全文 FTS', () async {
+    const content = '第一章🙂\n你好世界';
+    final staged = await storage.stageTextFile(content);
+    final chapterEnd = utf8.encode(content).length;
+    final manifest = BookImportManifest(
+      encoding: 'utf-8',
+      totalChars: content.length,
+      totalBytes: chapterEnd,
+      chapters: [
+        ChapterDescriptor(
+          title: '第一章',
+          startChar: 0,
+          endChar: content.length,
+          startByte: 0,
+          endByte: chapterEnd,
+        ),
+      ],
+    );
+
+    final book = await importDao.createPendingImportFromManifest(
+      title: '规范化正文',
+      stagedPath: staged.stagedPath,
+      targetPath: staged.targetPath,
+      manifest: manifest,
+      readChapter: (chapter) => storage.readTextRange(
+        staged.stagedPath,
+        startByte: chapter.startByte,
+        endByte: chapter.endByte,
+      ),
+    );
+
+    final chapter = (await database.query('chapters')).single;
+    expect(chapter['start_byte'], 0);
+    expect(chapter['end_byte'], chapterEnd);
+    expect(
+      await database.rawQuery(
+        'SELECT rowid FROM chapters_fts WHERE chapters_fts MATCH ?',
+        [toBigramQuery('你好')],
+      ),
+      hasLength(1),
+    );
+    expect(book.totalChars, content.length);
+  });
+
+  test('ImporterService 通过 worker 导入 TXT 后可按范围阅读和全文搜索', () async {
+    final source = File(p.join(tempDirectory.path, 'worker-book.txt'));
+    await source.writeAsString('第一章\n你好世界\n第二章\n搜索目标');
+    final service = ImporterService(importDao: importDao, storage: storage);
+
+    final result = await service.importFile(source.path);
+    final book = (await BookDao(database: database).listAll()).single;
+    final chapters = await database.query(
+      'chapters',
+      orderBy: 'chapter_index ASC',
+    );
+
+    expect(result.bookId, book.id);
+    expect(book.filePath, endsWith('.txt'));
+    expect(chapters, hasLength(2));
+    expect(chapters.first['start_byte'], 0);
+    expect(
+      await database.rawQuery(
+        'SELECT rowid FROM chapters_fts WHERE chapters_fts MATCH ?',
+        [toBigramQuery('搜索目标')],
+      ),
+      hasLength(1),
+    );
+    final hits = await SearchService(
+      dao: SearchDao(database: database),
+      storage: storage,
+    ).search('搜索目标');
+    expect(hits, hasLength(1));
+    expect(hits.single.snippet, contains('<mark>搜索目标</mark>'));
+    expect(
+      await storage.readChapterText(
+        book.filePath,
+        startChar: chapters.last['start_char']! as int,
+        endChar: chapters.last['end_char']! as int,
+        startByte: chapters.last['start_byte']! as int,
+        endByte: chapters.last['end_byte']! as int,
+      ),
+      contains('搜索目标'),
+    );
+  });
+
   test('章节或 FTS 写入失败时回滚整本书', () async {
     final staged = await storage.stageTextFile(_content);
     await database.execute('DROP TABLE chapters_fts');
 
     await expectLater(
-      importDao.createPendingImport(
+      importDao.createPendingImportFromManifest(
         title: '应回滚',
         stagedPath: staged.stagedPath,
         targetPath: staged.targetPath,
-        parsed: _parsedBook(),
+        manifest: _manifestFor(_content),
+        readChapter: (chapter) => storage.readTextRange(
+          staged.stagedPath,
+          startByte: chapter.startByte,
+          endByte: chapter.endByte,
+        ),
       ),
       throwsA(anything),
     );
@@ -86,13 +181,13 @@ void main() {
   });
 
   test('启动时完成数据库已提交但文件尚未发布的导入', () async {
-    final staged = await storage.stageTextFile(_content);
-    await importDao.createPendingImport(
+    final pending = await _createPendingImport(
       title: '待恢复',
-      stagedPath: staged.stagedPath,
-      targetPath: staged.targetPath,
-      parsed: _parsedBook(),
+      content: _content,
+      storage: storage,
+      importDao: importDao,
     );
+    final staged = pending.staged;
 
     await recoverApplicationData(database, storage: storage);
 
@@ -128,13 +223,14 @@ void main() {
   });
 
   test('文件状态无法确认时保留书籍数据并继续恢复', () async {
-    final staged = await storage.stageTextFile(_content);
-    final book = await importDao.createPendingImport(
+    final pending = await _createPendingImport(
       title: '暂时无法检查',
-      stagedPath: staged.stagedPath,
-      targetPath: staged.targetPath,
-      parsed: _parsedBook(),
+      content: _content,
+      storage: storage,
+      importDao: importDao,
     );
+    final staged = pending.staged;
+    final book = pending.book;
     await storage.finalizeStagedFile(staged);
     await importDao.markImportComplete(book.id);
 
@@ -152,13 +248,14 @@ void main() {
   });
 
   test('文件明确不存在时仍会清理损坏的书籍记录', () async {
-    final staged = await storage.stageTextFile(_content);
-    final book = await importDao.createPendingImport(
+    final pending = await _createPendingImport(
       title: '文件已丢失',
-      stagedPath: staged.stagedPath,
-      targetPath: staged.targetPath,
-      parsed: _parsedBook(),
+      content: _content,
+      storage: storage,
+      importDao: importDao,
     );
+    final staged = pending.staged;
+    final book = pending.book;
     await storage.finalizeStagedFile(staged);
     await importDao.markImportComplete(book.id);
     await storage.deleteFile(staged.targetPath);
@@ -188,6 +285,8 @@ void main() {
       'title': '第一章',
       'start_char': 0,
       'end_char': _content.length,
+      'start_byte': 0,
+      'end_byte': utf8.encode(_content).length,
     });
     await database.insert('chapters_fts', {
       'rowid': chapterId,
@@ -207,13 +306,14 @@ void main() {
   });
 
   test('启动时根据正式文件补建缺失的 FTS 行', () async {
-    final staged = await storage.stageTextFile(_content);
-    final book = await importDao.createPendingImport(
+    final pending = await _createPendingImport(
       title: '修复索引',
-      stagedPath: staged.stagedPath,
-      targetPath: staged.targetPath,
-      parsed: _parsedBook(),
+      content: _content,
+      storage: storage,
+      importDao: importDao,
     );
+    final staged = pending.staged;
+    final book = pending.book;
     await storage.finalizeStagedFile(staged);
     await importDao.markImportComplete(book.id);
     await database.delete('chapters_fts');
@@ -228,13 +328,14 @@ void main() {
   });
 
   test('数据库删除成功后文件失败不误报，并由启动清理重试', () async {
-    final staged = await storage.stageTextFile(_content);
-    final book = await importDao.createPendingImport(
+    final pending = await _createPendingImport(
       title: '待删除',
-      stagedPath: staged.stagedPath,
-      targetPath: staged.targetPath,
-      parsed: _parsedBook(),
+      content: _content,
+      storage: storage,
+      importDao: importDao,
     );
+    final staged = pending.staged;
+    final book = pending.book;
     await storage.finalizeStagedFile(staged);
     await importDao.markImportComplete(book.id);
 
@@ -255,16 +356,47 @@ void main() {
   });
 }
 
-ParsedBook _parsedBook() {
-  return const ParsedBook(
-    fullText: _content,
+class _PendingImport {
+  final StagedBookFile staged;
+  final Book book;
+
+  const _PendingImport({required this.staged, required this.book});
+}
+
+Future<_PendingImport> _createPendingImport({
+  required String title,
+  required String content,
+  required BookStorage storage,
+  required BookImportDao importDao,
+}) async {
+  final staged = await storage.stageTextFile(content);
+  final book = await importDao.createPendingImportFromManifest(
+    title: title,
+    stagedPath: staged.stagedPath,
+    targetPath: staged.targetPath,
+    manifest: _manifestFor(content),
+    readChapter: (chapter) => storage.readTextRange(
+      staged.stagedPath,
+      startByte: chapter.startByte,
+      endByte: chapter.endByte,
+    ),
+  );
+  return _PendingImport(staged: staged, book: book);
+}
+
+BookImportManifest _manifestFor(String content) {
+  final bytes = utf8.encode(content).length;
+  return BookImportManifest(
     encoding: 'utf-8',
+    totalChars: content.length,
+    totalBytes: bytes,
     chapters: [
-      ParsedChapter(
+      ChapterDescriptor(
         title: '第一章',
         startChar: 0,
-        endChar: _content.length,
-        content: _content,
+        endChar: content.length,
+        startByte: 0,
+        endByte: bytes,
       ),
     ],
   );

@@ -1,12 +1,11 @@
 // 沙盒书籍文件管理：通过临时文件发布协议隔离未完成导入。
+import 'dart:convert';
 import 'dart:developer' as developer;
 import 'dart:io';
 
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:uuid/uuid.dart';
-
-import '../encoding/text_decoder.dart';
 
 typedef StorageRootProvider = Future<Directory> Function();
 
@@ -21,7 +20,7 @@ class StagedBookFile {
 }
 
 // 路径策略：
-// - 正式文件：appDocs/books/<uuid>.<ext>
+// - 正式文件：appDocs/books/<uuid>.txt（统一规范化为 UTF-8）
 // - 临时文件：appDocs/books/.staging/<uuid>.<ext>.pending
 // - 数据库 books.file_path 只保存正式文件的相对路径
 class BookStorage {
@@ -76,6 +75,11 @@ class BookStorage {
       } catch (_) {}
       rethrow;
     }
+  }
+
+  // 为 worker 预留规范化正文文件路径；实际写入由 worker 在后台 isolate 完成。
+  Future<StagedBookFile> allocateNormalizedStagedFile() {
+    return _allocatePaths('.txt');
   }
 
   Future<StagedBookFile> _allocatePaths(String extension) async {
@@ -161,12 +165,114 @@ class BookStorage {
     }
   }
 
-  // Reader 与 Search 共用此入口，保证章节和书签字符坐标一致。
-  Future<String> readFullText(String relativePath) async {
+  // 正文统一为 UTF-8，可按字节范围读取单个章节，避免加载整本书。
+  Future<String> readTextRange(
+    String relativePath, {
+    required int startByte,
+    required int endByte,
+  }) async {
+    if (startByte < 0 || endByte < startByte) {
+      throw ArgumentError('正文字节范围无效：[$startByte, $endByte)');
+    }
     final absolute = await resolveAbsolute(relativePath);
-    final bytes = await File(absolute).readAsBytes();
-    final decoded = TextDecoder.decode(bytes);
-    return decoded.content.replaceAll('\r\n', '\n').replaceAll('\r', '\n');
+    final file = File(absolute);
+    final length = await file.length();
+    if (endByte > length) {
+      throw FileSystemException('正文字节范围超出文件长度', absolute);
+    }
+
+    final handle = await file.open();
+    try {
+      await handle.setPosition(startByte);
+      final bytes = <int>[];
+      // 常规文件通常一次读完，但 RandomAccessFile 允许返回短读；循环读取避免索引缺尾。
+      await for (final chunk in _readByteChunks(
+        handle,
+        endByte - startByte,
+        64 * 1024,
+        absolute,
+      )) {
+        bytes.addAll(chunk);
+      }
+      return utf8.decode(bytes);
+    } finally {
+      await handle.close();
+    }
+  }
+
+  // 搜索摘要按固定大小的 UTF-8 字节块读取，避免为寻找命中位置一次性加载整章。
+  Stream<String> readUtf8RangeChunks(
+    String relativePath, {
+    required int startByte,
+    required int endByte,
+    int chunkBytes = 64 * 1024,
+  }) async* {
+    if (startByte < 0 || endByte < startByte) {
+      throw ArgumentError('正文字节范围无效：[$startByte, $endByte)');
+    }
+    if (chunkBytes <= 0) {
+      throw ArgumentError.value(chunkBytes, 'chunkBytes', '必须大于 0');
+    }
+    final absolute = await resolveAbsolute(relativePath);
+    final file = File(absolute);
+    final length = await file.length();
+    if (endByte > length) {
+      throw FileSystemException('正文字节范围超出文件长度', absolute);
+    }
+
+    final handle = await file.open();
+    try {
+      await handle.setPosition(startByte);
+      yield* _readByteChunks(
+        handle,
+        endByte - startByte,
+        chunkBytes,
+        absolute,
+      ).transform(utf8.decoder);
+    } finally {
+      await handle.close();
+    }
+  }
+
+  Stream<List<int>> _readByteChunks(
+    RandomAccessFile handle,
+    int length,
+    int chunkBytes,
+    String absolute,
+  ) async* {
+    var remaining = length;
+    while (remaining > 0) {
+      final chunk = await handle.read(
+        remaining < chunkBytes ? remaining : chunkBytes,
+      );
+      if (chunk.isEmpty) {
+        throw FileSystemException('读取正文字节范围时提前遇到文件尾', absolute);
+      }
+      remaining -= chunk.length;
+      yield chunk;
+    }
+  }
+
+  // 所有书籍都必须具备 UTF-8 字节范围；范围不完整直接报错，避免隐式整本读取。
+  Future<String> readChapterText(
+    String relativePath, {
+    required int startChar,
+    required int endChar,
+    required int startByte,
+    required int endByte,
+  }) async {
+    if (startByte < 0 || endByte < startByte) {
+      throw StateError('章节缺少有效的 UTF-8 字节范围');
+    }
+    final text = await readTextRange(
+      relativePath,
+      startByte: startByte,
+      endByte: endByte,
+    );
+    if (text.length != endChar - startChar) {
+      throw StateError('章节字符范围与 UTF-8 字节范围不一致');
+    }
+    return text;
   }
 
   Future<void> deleteFile(String relativePath) async {

@@ -2,8 +2,8 @@
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 abstract final class DatabaseSchema {
-  // 每次结构变更都要递增，并在 database_migrations.dart 注册对应迁移。
-  static const int version = 5;
+  // 正式 v1 以当前结构为基线；后续结构变更必须递增版本并注册对应迁移。
+  static const int version = 1;
 
   static Future<void> create(DatabaseExecutor db) async {
     await createBooks(db);
@@ -41,6 +41,8 @@ abstract final class DatabaseSchema {
         title TEXT NOT NULL,
         start_char INTEGER NOT NULL,
         end_char INTEGER NOT NULL,
+        start_byte INTEGER NOT NULL,
+        end_byte INTEGER NOT NULL,
         FOREIGN KEY (book_id) REFERENCES books(id) ON DELETE CASCADE
       )
     ''');
