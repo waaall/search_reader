@@ -8,7 +8,7 @@ import '../../domain/reading_progress.dart';
 import '../parser/book_format.dart';
 import 'database.dart';
 import 'database_operations.dart';
-import 'text_index.dart';
+import 'pending_import_indexer.dart';
 import 'text_index_worker.dart';
 
 // 数据访问层：每个表一个 DAO 类
@@ -79,7 +79,7 @@ class BookImportDao {
     await deleteBookRecords(_db, bookId);
   }
 
-  // 新导入使用章节描述和按章读取回调，事务内只保留当前章节正文和 token。
+  // 新导入先在短事务内写元数据，文件读取和分词完成后再分批提交 FTS。
   Future<Book> createPendingImportFromManifest({
     required String title,
     String? author,
@@ -104,7 +104,7 @@ class BookImportDao {
 
       for (var index = 0; index < manifest.chapters.length; index++) {
         final chapter = manifest.chapters[index];
-        final chapterId = await txn.insert('chapters', {
+        await txn.insert('chapters', {
           'book_id': bookId,
           'chapter_index': index,
           'title': chapter.title,
@@ -113,29 +113,32 @@ class BookImportDao {
           'start_byte': chapter.startByte,
           'end_byte': chapter.endByte,
         });
-        final content = await readChapter(chapter);
-        final tokens = buildIndex == null
-            ? ChapterIndexTokens(
-                title: toBigramTokens(chapter.title),
-                search: toBigramTokens(content),
-              )
-            : await buildIndex(chapter.title, content);
-        await txn.insert('chapters_fts', {
-          'rowid': chapterId,
-          'title': tokens.title,
-          'search': tokens.search,
-        });
       }
 
       await txn.insert('import_jobs', {
         'book_id': bookId,
         'staged_path': stagedPath,
         'target_path': targetPath,
-        'state': 'ready_to_finalize',
+        'state': 'indexing',
         'created_at': now.millisecondsSinceEpoch,
       });
       return bookId;
     });
+
+    try {
+      await indexPendingImport(
+        _db,
+        bookId: id,
+        readChapter: readChapter,
+        buildIndex: buildIndex,
+      );
+    } catch (error, stackTrace) {
+      // 正常路径下这里会完整删除半成品；若数据库本身已损坏，则交给启动恢复继续处理。
+      try {
+        await cancelPendingImport(id);
+      } catch (_) {}
+      Error.throwWithStackTrace(error, stackTrace);
+    }
 
     return Book(
       id: id,

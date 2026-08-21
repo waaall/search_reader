@@ -115,7 +115,7 @@ abstract final class DatabaseSchema {
         book_id INTEGER PRIMARY KEY,
         staged_path TEXT NOT NULL,
         target_path TEXT NOT NULL,
-        state TEXT NOT NULL CHECK (state IN ('ready_to_finalize')),
+        state TEXT NOT NULL CHECK (state IN ('indexing', 'ready_to_finalize')),
         created_at INTEGER NOT NULL,
         FOREIGN KEY (book_id) REFERENCES books(id) ON DELETE CASCADE
       )

@@ -7,6 +7,8 @@
 - `database_migrations.dart` 按目标版本注册增量迁移。
 - 当前 v1 已直接使用规范化 UTF-8 文件、章节字节范围和 bigram FTS 结构，不保留早期开发结构的兼容分支。
 - 后续每个版本只负责从前一版本演进一步；缺少迁移时启动失败而不是静默清空数据。
+- 导入只在短事务内写入书籍元数据和 `import_jobs(indexing)`；文件读取、分词和 FTS 写入在事务外分批执行。
+- 启动恢复会继续 `indexing` 状态的缺失 FTS，完成后再发布文件。
 - 迁移由 sqflite 事务保护，完成后执行 `PRAGMA foreign_key_check`。
 - 事务提交后才按 `books.file_path` 白名单删除无引用文件。
 
@@ -30,6 +32,6 @@
 
 ## 导入/索引可能卡 UI
 
-导入时解析章节、生成 bigram、逐章写 FTS 都在主流程里执行：
-/Users/zhengxu/Desktop/some_code/my-personal-git/search_reader/lib/core/db/daos.dart
-10MB txt 或大 epub 时，用户可能感觉 App 卡住。后面最好把解析和索引放到 isolate，或者至少分批写入并让 UI 可取消。
+数据库长事务已拆分：文件读取、分词和 FTS 写入不再占用同一个长事务；索引批次只包含短事务内的 FTS INSERT。
+
+仍待处理的风险是 TXT/EPUB 解析阶段的内存峰值：当前修改没有改变整本 TXT 解码和 EPUB ZIP 读取策略。

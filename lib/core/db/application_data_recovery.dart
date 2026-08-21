@@ -3,11 +3,13 @@ import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 import '../storage/book_storage.dart';
 import 'database_operations.dart';
+import 'pending_import_indexer.dart';
 import 'text_index_worker.dart';
 
 Future<void> recoverApplicationData(Database db, {BookStorage? storage}) async {
   final bookStorage = storage ?? BookStorage.shared;
 
+  await _resumeIndexingImports(db, bookStorage);
   await _recoverPendingImports(db, bookStorage);
   await _removeBrokenBooks(db, bookStorage);
   await _repairFtsIndex(db, bookStorage);
@@ -19,11 +21,51 @@ Future<void> recoverApplicationData(Database db, {BookStorage? storage}) async {
   }
 }
 
+Future<void> _resumeIndexingImports(Database db, BookStorage storage) async {
+  final jobs = await db.rawQuery('''
+    SELECT job.book_id, job.staged_path, job.target_path
+    FROM import_jobs job
+    JOIN books b ON b.id = job.book_id
+    WHERE job.state = 'indexing'
+    ORDER BY job.created_at
+  ''');
+
+  for (final job in jobs) {
+    final bookId = job['book_id'] as int;
+    final stagedPath = job['staged_path'] as String;
+    final targetPath = job['target_path'] as String;
+    final stagedExists = await storage.exists(stagedPath);
+    final targetExists = await storage.exists(targetPath);
+
+    if (!stagedExists && !targetExists) {
+      // 索引中断且两侧文件都不存在，数据库半成品已经无法恢复。
+      await deleteBookRecords(db, bookId);
+      continue;
+    }
+
+    final sourcePath = stagedExists ? stagedPath : targetPath;
+    try {
+      await indexPendingImport(
+        db,
+        bookId: bookId,
+        readChapter: (chapter) => storage.readTextRange(
+          sourcePath,
+          startByte: chapter.startByte,
+          endByte: chapter.endByte,
+        ),
+      );
+    } catch (_) {
+      // 当前章节暂时无法读取时保留 indexing 状态，下次启动继续补建。
+    }
+  }
+}
+
 Future<void> _recoverPendingImports(Database db, BookStorage storage) async {
   final jobs = await db.rawQuery('''
     SELECT job.book_id, job.staged_path, job.target_path
     FROM import_jobs job
     JOIN books b ON b.id = job.book_id
+    WHERE job.state = 'ready_to_finalize'
     ORDER BY job.created_at
   ''');
 

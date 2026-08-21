@@ -409,11 +409,13 @@ LIMIT 100;
 2. 解析成功后写入 appDocs/books/.staging/{uuid}.<ext>.pending，并刷新文件
    - txt：解析并转换为规范化 UTF-8 文本后写入
    - epub：解析后只把抽取出的纯文本以 utf-8 .txt 写入（原 epub 不落盘）
-3. 同一 SQLite 事务写入 books、chapters、chapters_fts 与 import_jobs
-4. 事务提交后，通过同一卷内 rename 把临时文件原子发布到 books/{uuid}.<ext>
-5. 删除 import_jobs 记录，书籍才对书架与搜索查询可见
-6. 数据库 books.file_path 存正式文件的相对路径（不存绝对路径，避免沙盒迁移失效）
-7. `readTextRange(relativePath, startByte, endByte)` 按规范化 UTF-8 字节范围读取；Reader 与 Search 共用，保证章节起止位置、搜索跳转 offset、书签 offset 的坐标一致
+3. 短 SQLite 事务写入 books、chapters 与 `import_jobs(state='indexing')`
+4. 事务外按章读取正文、生成 bigram，并以短批次事务写入 chapters_fts
+5. FTS 全部写入后，将 import_jobs 改为 `ready_to_finalize`
+6. 通过同一卷内 rename 把临时文件原子发布到 books/{uuid}.<ext>
+7. 删除 import_jobs 记录，书籍才对书架与搜索查询可见
+8. 数据库 books.file_path 存正式文件的相对路径（不存绝对路径，避免沙盒迁移失效）
+9. `readTextRange(relativePath, startByte, endByte)` 按规范化 UTF-8 字节范围读取；Reader 与 Search 共用，保证章节起止位置、搜索跳转 offset、书签 offset 的坐标一致
 ```
 
 崩溃恢复与删除：
@@ -428,6 +430,7 @@ LIMIT 100;
 - 当前结构作为正式数据库 v1 基线；首发前的开发数据库不属于需要兼容的发布版本，首发前应清理应用数据或删除旧的 `search_reader.db`。
 - v1 之后，`database_migrations.dart` 为每个目标版本注册独立的增量迁移，禁止升级时整体删除业务表。
 - sqflite 在事务内执行 `onUpgrade`；迁移失败会回滚，数据库版本不会提升。
+- 导入元数据事务不包含文件读取和分词；`import_jobs` 的 `indexing` 状态用于启动后补建缺失 FTS，只有进入 `ready_to_finalize` 才允许发布文件。
 - 每次启动都由 `recoverApplicationData()` 对账数据库与沙盒文件；文件清理失败不影响数据库和应用启动。
 
 ### 5.8 主题、设计 token 与动效（shared/theme）

@@ -1,4 +1,5 @@
-// 导入崩溃一致性测试：验证数据库原子提交、临时文件发布和启动恢复。
+// 导入一致性测试：验证短事务、分批索引、临时文件发布和启动恢复。
+import 'dart:async';
 import 'dart:io';
 import 'dart:convert';
 
@@ -47,7 +48,7 @@ void main() {
     await tempDirectory.delete(recursive: true);
   });
 
-  test('书籍、章节、FTS 和导入日志在同一事务内提交', () async {
+  test('元数据和分批 FTS 写入完成后保留待发布日志', () async {
     final pending = await _createPendingImport(
       title: '测试书籍',
       content: _content,
@@ -156,21 +157,16 @@ void main() {
     );
   });
 
-  test('章节或 FTS 写入失败时回滚整本书', () async {
+  test('索引处理失败时回滚整本书', () async {
     final staged = await storage.stageTextFile(_content);
-    await database.execute('DROP TABLE chapters_fts');
-
     await expectLater(
       importDao.createPendingImportFromManifest(
         title: '应回滚',
         stagedPath: staged.stagedPath,
         targetPath: staged.targetPath,
         manifest: _manifestFor(_content),
-        readChapter: (chapter) => storage.readTextRange(
-          staged.stagedPath,
-          startByte: chapter.startByte,
-          endByte: chapter.endByte,
-        ),
+        readChapter: (_) =>
+            Future<String>.error(const FileSystemException('模拟章节读取失败')),
       ),
       throwsA(anything),
     );
@@ -195,6 +191,84 @@ void main() {
     expect(await storage.exists(staged.targetPath), isTrue);
     expect(await database.query('import_jobs'), isEmpty);
     expect(await BookDao(database: database).listAll(), hasLength(1));
+  });
+
+  test('启动时恢复索引中断的导入并继续发布', () async {
+    final staged = await storage.stageTextFile(_content);
+    final bookId = await database.insert('books', {
+      'title': '索引中断',
+      'author': null,
+      'file_path': staged.targetPath,
+      'encoding': 'utf-8',
+      'total_chars': _content.length,
+      'created_at': 1,
+      'last_read_at': null,
+    });
+    final bytes = utf8.encode(_content).length;
+    await database.insert('chapters', {
+      'book_id': bookId,
+      'chapter_index': 0,
+      'title': '第一章',
+      'start_char': 0,
+      'end_char': _content.length,
+      'start_byte': 0,
+      'end_byte': bytes,
+    });
+    await database.insert('import_jobs', {
+      'book_id': bookId,
+      'staged_path': staged.stagedPath,
+      'target_path': staged.targetPath,
+      'state': 'indexing',
+      'created_at': 1,
+    });
+
+    await recoverApplicationData(database, storage: storage);
+
+    expect(
+      await database.rawQuery(
+        'SELECT rowid FROM chapters_fts WHERE chapters_fts MATCH ?',
+        [toBigramQuery('你好')],
+      ),
+      hasLength(1),
+    );
+    expect(await database.query('import_jobs'), isEmpty);
+    expect(await storage.exists(staged.stagedPath), isFalse);
+    expect(await storage.exists(staged.targetPath), isTrue);
+    expect(await BookDao(database: database).listAll(), hasLength(1));
+  });
+
+  test('索引读文件期间不长时间占用数据库事务', () async {
+    final staged = await storage.stageTextFile(_content);
+    final readStarted = Completer<void>();
+    final releaseRead = Completer<void>();
+    final pendingImport = importDao.createPendingImportFromManifest(
+      title: '短事务',
+      stagedPath: staged.stagedPath,
+      targetPath: staged.targetPath,
+      manifest: _manifestFor(_content),
+      readChapter: (chapter) async {
+        if (!readStarted.isCompleted) readStarted.complete();
+        await releaseRead.future;
+        return storage.readTextRange(
+          staged.stagedPath,
+          startByte: chapter.startByte,
+          endByte: chapter.endByte,
+        );
+      },
+    );
+
+    try {
+      await readStarted.future.timeout(const Duration(seconds: 2));
+      expect(
+        await BookDao(database: database)
+            .listAll()
+            .timeout(const Duration(seconds: 2)),
+        isEmpty,
+      );
+    } finally {
+      if (!releaseRead.isCompleted) releaseRead.complete();
+      await pendingImport;
+    }
   });
 
   test('启动时清理无日志临时文件、坏书和孤儿正式文件', () async {

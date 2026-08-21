@@ -12,7 +12,7 @@ import '../../core/storage/book_storage.dart';
 import '../../domain/book.dart';
 import 'import_progress.dart';
 
-// 导入流程编排：worker 解析正文 → 暂存规范化文本 → 写入数据库和全文索引。
+// 导入流程编排：worker 解析正文 → 暂存规范化文本 → 短事务写元数据 → 分批建立全文索引。
 class ImporterService {
   ImporterService({
     BookImportDao? importDao,
