@@ -97,6 +97,56 @@ class TextPaginator {
     return Pagination(pages);
   }
 
+  // 懒分页只测量当前位置之后的有限窗口，返回当前页可容纳的前缀长度。
+  static int fitPrefixLength({
+    required String text,
+    required TextStyle style,
+    required double contentWidth,
+    required double contentHeight,
+  }) {
+    if (text.isEmpty) return 0;
+    if (contentWidth <= 0 || contentHeight <= 0) return 1;
+    if (_measureHeight(text, style, contentWidth) <= contentHeight) {
+      return text.length;
+    }
+    return _findFitPrefix(
+      text: text,
+      style: style,
+      contentWidth: contentWidth,
+      contentHeight: contentHeight,
+    );
+  }
+
+  // 向前翻页时返回能容纳的最长后缀起点，保证 [result, text.length) 完整成页。
+  static int fitSuffixStart({
+    required String text,
+    required TextStyle style,
+    required double contentWidth,
+    required double contentHeight,
+  }) {
+    if (text.isEmpty) return 0;
+    if (contentWidth <= 0 || contentHeight <= 0) {
+      return _safeSuffixStart(text, text.length - 1);
+    }
+    if (_measureHeight(text, style, contentWidth) <= contentHeight) return 0;
+
+    var lo = 0;
+    var hi = text.length - 1;
+    var best = text.length - 1;
+    while (lo <= hi) {
+      final mid = (lo + hi) >> 1;
+      final start = _safeSuffixStart(text, mid);
+      final h = _measureHeight(text.substring(start), style, contentWidth);
+      if (h <= contentHeight) {
+        best = start;
+        hi = mid - 1;
+      } else {
+        lo = mid + 1;
+      }
+    }
+    return best;
+  }
+
   // 测量给定文本在指定宽度下的高度
   static double _measureHeight(String text, TextStyle style, double maxWidth) {
     final tp = TextPainter(
@@ -116,17 +166,44 @@ class TextPaginator {
   }) {
     var lo = 1;
     var hi = text.length;
-    var best = 1;
+    var best = _safePrefixEnd(text, 1);
     while (lo <= hi) {
-      final mid = (lo + hi) >> 1;
+      final rawMid = (lo + hi) >> 1;
+      final mid = _safePrefixEnd(text, rawMid);
       final h = _measureHeight(text.substring(0, mid), style, contentWidth);
       if (h <= contentHeight) {
         best = mid;
-        lo = mid + 1;
+        lo = rawMid + 1;
       } else {
-        hi = mid - 1;
+        hi = rawMid - 1;
       }
     }
     return best;
   }
+
+  static int _safePrefixEnd(String text, int end) {
+    if (end > 0 &&
+        end < text.length &&
+        _isHighSurrogate(text.codeUnitAt(end - 1)) &&
+        _isLowSurrogate(text.codeUnitAt(end))) {
+      return end + 1;
+    }
+    return end;
+  }
+
+  static int _safeSuffixStart(String text, int start) {
+    if (start > 0 &&
+        start < text.length &&
+        _isLowSurrogate(text.codeUnitAt(start)) &&
+        _isHighSurrogate(text.codeUnitAt(start - 1))) {
+      return start - 1;
+    }
+    return start;
+  }
+
+  static bool _isHighSurrogate(int codeUnit) =>
+      codeUnit >= 0xD800 && codeUnit <= 0xDBFF;
+
+  static bool _isLowSurrogate(int codeUnit) =>
+      codeUnit >= 0xDC00 && codeUnit <= 0xDFFF;
 }

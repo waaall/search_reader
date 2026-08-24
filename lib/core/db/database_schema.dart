@@ -2,13 +2,14 @@
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 abstract final class DatabaseSchema {
-  // 正式 v1 以当前结构为基线；后续结构变更必须递增版本并注册对应迁移。
-  static const int version = 1;
+  // v1 是正式基线；当前版本随增量迁移递增。
+  static const int version = 2;
 
   static Future<void> create(DatabaseExecutor db) async {
     await createBooks(db);
     await createChaptersTable(db);
     await createChaptersIndex(db);
+    await createRenderSegments(db);
     await createReadingProgress(db);
     await createChaptersFts(db);
     await createSettings(db);
@@ -51,6 +52,27 @@ abstract final class DatabaseSchema {
   static Future<void> createChaptersIndex(DatabaseExecutor db) async {
     await db.execute(
       'CREATE INDEX idx_chapters_book ON chapters(book_id, chapter_index)',
+    );
+  }
+
+  static Future<void> createRenderSegments(DatabaseExecutor db) async {
+    // 分片只限制单次读取和布局规模，章节仍是目录、搜索与进度的语义单位。
+    await db.execute('''
+      CREATE TABLE render_segments (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        chapter_id INTEGER NOT NULL,
+        segment_index INTEGER NOT NULL,
+        start_char INTEGER NOT NULL,
+        end_char INTEGER NOT NULL,
+        start_byte INTEGER NOT NULL,
+        end_byte INTEGER NOT NULL,
+        FOREIGN KEY (chapter_id) REFERENCES chapters(id) ON DELETE CASCADE,
+        UNIQUE (chapter_id, segment_index)
+      )
+    ''');
+    await db.execute(
+      'CREATE INDEX idx_render_segments_chapter_range '
+      'ON render_segments(chapter_id, start_char, end_char)',
     );
   }
 

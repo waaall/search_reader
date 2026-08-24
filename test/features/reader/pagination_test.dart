@@ -161,4 +161,40 @@ void main() {
       }
     });
   });
+
+  group('懒分页窗口', () {
+    test('前向页边界不会切断 UTF-16 代理对', () {
+      final text = '🙂' * 100;
+      final end = TextPaginator.fitPrefixLength(
+        text: text,
+        style: const TextStyle(fontSize: 24, height: 1.5),
+        contentWidth: 60,
+        contentHeight: 60,
+      );
+      expect(end, greaterThan(0));
+      expect(_cutsSurrogatePair(text, end), isFalse);
+    });
+
+    test('后向页边界不会切断 UTF-16 代理对', () {
+      final text = '🙂' * 100;
+      final start = TextPaginator.fitSuffixStart(
+        text: text,
+        style: const TextStyle(fontSize: 24, height: 1.5),
+        contentWidth: 60,
+        contentHeight: 60,
+      );
+      expect(start, lessThan(text.length));
+      expect(_cutsSurrogatePair(text, start), isFalse);
+    });
+  });
+}
+
+bool _cutsSurrogatePair(String text, int offset) {
+  if (offset <= 0 || offset >= text.length) return false;
+  final before = text.codeUnitAt(offset - 1);
+  final after = text.codeUnitAt(offset);
+  return before >= 0xD800 &&
+      before <= 0xDBFF &&
+      after >= 0xDC00 &&
+      after <= 0xDFFF;
 }

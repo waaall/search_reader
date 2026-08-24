@@ -7,6 +7,7 @@ import 'package:path/path.dart' as p;
 import 'package:search_reader/core/db/text_index_worker.dart';
 import 'package:search_reader/core/parser/book_import_worker.dart';
 import 'package:search_reader/core/parser/import_limits.dart';
+import 'package:search_reader/core/parser/render_segmenter.dart';
 import 'package:search_reader/core/parser/txt_parser.dart';
 
 void main() {
@@ -44,6 +45,11 @@ void main() {
       );
       expect(content.length, chapter.endChar - chapter.startChar);
       expect(chapter.startByte, lessThanOrEqualTo(chapter.endByte));
+      expect(chapter.renderSegments, isNotEmpty);
+      expect(chapter.renderSegments.first.startChar, chapter.startChar);
+      expect(chapter.renderSegments.last.endChar, chapter.endChar);
+      expect(chapter.renderSegments.first.startByte, chapter.startByte);
+      expect(chapter.renderSegments.last.endByte, chapter.endByte);
     }
   });
 
@@ -75,6 +81,28 @@ void main() {
 
     expect(manifest.chapters, hasLength(1));
     expect(await File(output).readAsString(), '第一章\n你好世界');
+  });
+
+  test('未识别章节的零碎段落仍保持单个目录章节并生成有界分片', () async {
+    final sourceText = List.generate(8000, (index) => '普通段落$index').join('\n');
+    final input = File(p.join(tempDirectory.path, 'no-chapters.txt'));
+    final output = p.join(tempDirectory.path, 'no-chapters-normalized.txt');
+    await input.writeAsString(sourceText);
+
+    final manifest = await TxtParser().parseToFile(input.path, output);
+    final chapter = manifest.chapters.single;
+
+    expect(chapter.title, '正文');
+    expect(chapter.renderSegments.length, greaterThan(1));
+    expect(chapter.renderSegments.length, lessThan(20));
+    expect(
+      chapter.renderSegments.every(
+        (segment) => segment.charCount <= ReaderRenderPolicy.defaultMaxChars,
+      ),
+      isTrue,
+    );
+    expect(chapter.renderSegments.first.startChar, chapter.startChar);
+    expect(chapter.renderSegments.last.endChar, chapter.endChar);
   });
 
   test('大块写入不会把 UTF-16 代理对切成两个替换字符', () async {

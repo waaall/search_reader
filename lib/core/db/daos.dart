@@ -5,6 +5,7 @@ import '../../domain/book.dart';
 import '../../domain/bookmark.dart';
 import '../../domain/chapter.dart';
 import '../../domain/reading_progress.dart';
+import '../../domain/render_segment.dart';
 import '../parser/book_format.dart';
 import 'database.dart';
 import 'database_operations.dart';
@@ -104,7 +105,7 @@ class BookImportDao {
 
       for (var index = 0; index < manifest.chapters.length; index++) {
         final chapter = manifest.chapters[index];
-        await txn.insert('chapters', {
+        final chapterId = await txn.insert('chapters', {
           'book_id': bookId,
           'chapter_index': index,
           'title': chapter.title,
@@ -113,6 +114,21 @@ class BookImportDao {
           'start_byte': chapter.startByte,
           'end_byte': chapter.endByte,
         });
+        for (
+          var segmentIndex = 0;
+          segmentIndex < chapter.renderSegments.length;
+          segmentIndex++
+        ) {
+          final segment = chapter.renderSegments[segmentIndex];
+          await txn.insert('render_segments', {
+            'chapter_id': chapterId,
+            'segment_index': segmentIndex,
+            'start_char': segment.startChar,
+            'end_char': segment.endChar,
+            'start_byte': segment.startByte,
+            'end_byte': segment.endByte,
+          });
+        }
       }
 
       await txn.insert('import_jobs', {
@@ -153,7 +169,10 @@ class BookImportDao {
 }
 
 class ChapterDao {
-  Database get _db => AppDatabase.instance.db;
+  ChapterDao({Database? database}) : _database = database;
+
+  final Database? _database;
+  Database get _db => _database ?? AppDatabase.instance.db;
 
   Future<List<Chapter>> listByBook(int bookId) async {
     final rows = await _db.query(
@@ -173,6 +192,50 @@ class ChapterDao {
     );
     if (rows.isEmpty) return null;
     return Chapter.fromRow(rows.first);
+  }
+}
+
+class RenderSegmentDao {
+  RenderSegmentDao({Database? database}) : _database = database;
+
+  final Database? _database;
+  Database get _db => _database ?? AppDatabase.instance.db;
+
+  Future<List<RenderSegment>> listByChapter(int chapterId) async {
+    final rows = await _db.query(
+      'render_segments',
+      where: 'chapter_id = ?',
+      whereArgs: [chapterId],
+      orderBy: 'segment_index ASC',
+    );
+    return rows.map(RenderSegment.fromRow).toList(growable: false);
+  }
+
+  // 首次打开旧书时原子写入，避免补建中断留下半套范围。
+  Future<void> replaceChapterSegments(
+    int chapterId,
+    List<RenderSegmentDescriptor> segments,
+  ) async {
+    await _db.transaction((txn) async {
+      await txn.delete(
+        'render_segments',
+        where: 'chapter_id = ?',
+        whereArgs: [chapterId],
+      );
+      final batch = txn.batch();
+      for (var index = 0; index < segments.length; index++) {
+        final segment = segments[index];
+        batch.insert('render_segments', {
+          'chapter_id': chapterId,
+          'segment_index': index,
+          'start_char': segment.startChar,
+          'end_char': segment.endChar,
+          'start_byte': segment.startByte,
+          'end_byte': segment.endByte,
+        });
+      }
+      await batch.commit(noResult: true);
+    });
   }
 }
 

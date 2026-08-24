@@ -8,11 +8,11 @@ A local fiction reader. The goal is to import txt / epub novels into the device 
 
 - Import local txt / epub files and copy them into the app sandbox.
 - Automatically detect common Chinese text encodings: UTF-8, UTF-16, GBK / GB18030.
-- Parse novels by chapter; if no chapter can be detected, the whole book is treated as a single chapter.
+- Parse novels by chapter; if no chapter can be detected, the book remains one logical chapter while invisible bounded render segments are generated internally.
 - Sort the library by recent reading activity, with import progress and error prompts.
 - Reader page supports two reading modes:
-  - **Paginated mode**: paginates with `TextPainter` based on font size, line spacing, and screen size.
-  - **Scroll mode**: continuous scrolling, with progress saved after scrolling stops.
+  - **Paginated mode**: computes only the current page with `TextPainter`, allowing a page to continue across internal render segments.
+  - **Scroll mode**: lazily builds nearby segments with slivers and saves progress after scrolling stops.
 - Reading settings: font size, line spacing, light / dark / sepia themes, and paginated / scroll modes.
 - Persist reading progress and restore the last position when reopening a book.
 - Bookmarks: add bookmarks from the reader, view them in the contents / bookmarks drawer, and view or delete them from the global bookmarks page.
@@ -66,5 +66,5 @@ flutter build macos    # macOS .app
 ## Data & Privacy
 
 - Book files are copied into the `books/` subdirectory under the app documents directory.
-- The database file is `search_reader.db`; it stores book metadata, chapters, indexes, reading progress, settings, and bookmarks.
+- The database file is `search_reader.db`; it stores book metadata, logical chapters, render segments, indexes, reading progress, settings, and bookmarks.
 - Full-text indexes and reading data are stored only on the local device.

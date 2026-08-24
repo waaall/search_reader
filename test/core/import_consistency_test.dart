@@ -131,6 +131,8 @@ void main() {
     expect(result.bookId, book.id);
     expect(book.filePath, endsWith('.txt'));
     expect(chapters, hasLength(2));
+    final renderSegments = await database.query('render_segments');
+    expect(renderSegments, hasLength(2));
     expect(chapters.first['start_byte'], 0);
     expect(
       await database.rawQuery(
@@ -260,9 +262,9 @@ void main() {
     try {
       await readStarted.future.timeout(const Duration(seconds: 2));
       expect(
-        await BookDao(database: database)
-            .listAll()
-            .timeout(const Duration(seconds: 2)),
+        await BookDao(
+          database: database,
+        ).listAll().timeout(const Duration(seconds: 2)),
         isEmpty,
       );
     } finally {

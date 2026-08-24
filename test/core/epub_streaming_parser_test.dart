@@ -71,6 +71,7 @@ void main() {
     final content = await File(outputPath).readAsString();
 
     expect(manifest.chapters, hasLength(1));
+    expect(manifest.chapters.single.renderSegments, isNotEmpty);
     expect(content, contains('第一章'));
     expect(content, contains('你好世界'));
     expect(manifest.totalBytes, utf8.encode(content).length);

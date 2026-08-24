@@ -162,6 +162,19 @@ CREATE TABLE chapters (
 );
 CREATE INDEX idx_chapters_book ON chapters(book_id, chapter_index);
 
+-- 内部渲染分片：限制单次文件读取和文本布局规模，不作为目录章节展示
+CREATE TABLE render_segments (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  chapter_id INTEGER NOT NULL,
+  segment_index INTEGER NOT NULL,
+  start_char INTEGER NOT NULL,
+  end_char INTEGER NOT NULL,
+  start_byte INTEGER NOT NULL,
+  end_byte INTEGER NOT NULL,
+  FOREIGN KEY (chapter_id) REFERENCES chapters(id) ON DELETE CASCADE,
+  UNIQUE (chapter_id, segment_index)
+);
+
 -- 阅读进度（每本书一条）
 CREATE TABLE reading_progress (
   book_id INTEGER PRIMARY KEY,
@@ -213,6 +226,7 @@ CREATE TABLE import_jobs (
 **Schema 设计要点**：
 
 - 规范化后的正文以 UTF-8 保存在沙盒文件中；阅读器正文与搜索 snippet 都按起止位置从文件切片（`BookStorage.readTextRange`），避免在数据库里再保留一整份书。
+- 目录章节与渲染分片分离：零碎段落会累积到目标容量，切点尽量落在换行或标点处；超长单段才在安全字符边界强制切分。旧书首次打开章节时流式补建分片。
 - FTS5 用 **unicode61 + Dart 侧 bigram 化**：原文 `你好世界` → 索引序列 `你好 好世 世界`，每个 bigram 作为完整 token。
 - 查询同样 bigram 化 + 紧邻短语：`你好世` → `("你好" + "好世")`，等价于原文连续出现 `你好世`。
 - `bookmarks` 通过 `(book_id, chapter_index, char_offset)` 唯一约束去重；重复加书签时覆盖 note / created_at。
@@ -321,8 +335,8 @@ class ReaderSettings {
 
 | 场景 | 保存内容 | 说明 |
 |---|---|---|
-| 翻页模式换页 | 当前页起始字符偏移 | `PageView.onPageChanged` 上报 |
-| 滚动模式停止滚动 | 滚动比例映射出的章节内字符偏移 | `ScrollEndNotification` 上报 |
+| 翻页模式换页 | 当前页起始字符偏移 | 懒分页页游标上报 |
+| 滚动模式停止滚动 | 当前可见分片内估算出的章节字符偏移 | `ScrollEndNotification` 与节流兜底上报 |
 | 目录 / 上下章 / 书签 / 搜索跳转 | 目标章节 + 目标 offset | 跳转后立即落库，避免返回书架后丢位置 |
 | 点击阅读页返回按钮或系统返回键 | 当前可见页 / 当前滚动位置 | 退出前先保存，再执行 `Navigator.pop()` |
 
@@ -332,8 +346,8 @@ class ReaderSettings {
 
 | 模式 | 实现 | 进度策略 | 适用场景 |
 |---|---|---|---|
-| 翻页 `paginated` | `_PaginatedView` + `TextPaginator` | 当前页起始字符偏移 | 类 Kindle 翻页阅读 |
-| 滚动 `scroll` | `_ScrollView` + `ScrollController` | 滚动比例映射章节字符偏移 | 连续滑动阅读 |
+| 翻页 `paginated` | `SegmentedPaginatedReaderView` + `LazyChapterPaginator` | 当前页起始字符偏移 | 类 Kindle 翻页阅读 |
+| 滚动 `scroll` | `SegmentedScrollReaderView` + `CustomScrollView` | 可见分片内字符偏移 | 连续滑动阅读 |
 
 公共交互能力：
 
@@ -347,33 +361,25 @@ class ReaderSettings {
 
 滚动模式的性能约束：
 
-- 滚动进度百分比用 `ValueNotifier<double>` 局部刷新，避免每次滚动都重建大段正文 `Text`。
-- 停止滚动时通过 `ScrollEndNotification` 保存进度，降低数据库写入频率。
-- 当前位置按 `scrollOffset / maxScrollExtent` 映射到章节字符偏移；这是近似值，但足以用于恢复阅读位置。
+- `CustomScrollView.center` 以目标分片作为初始中心，前后 Sliver 都按需构建，无需测量目标位置之前的完整章节。
+- 分片正文使用有界 LRU 缓存，并预取当前位置前后各一片；加载占位高度按字符数估算，避免一次触发大量远处分片读取。
+- 滚动进度百分比用 `ValueNotifier<double>` 局部刷新；停止滚动后保存可见分片内的近似字符偏移，避免高频写库。
 
 ### 5.5 分页引擎（features/reader/pagination.dart）
 
-**策略**：按章节独立分页（不跨章节），实时根据当前字号 / 行距 / 屏幕尺寸计算。
+**策略**：不跨逻辑章节，但允许单页跨内部渲染分片；实时根据当前字号、行距和屏幕尺寸只计算当前页。
 
 ```text
-输入：章节文本 + 显示参数（屏幕宽/高、字号、行距、内边距、字体）
-处理：用 Flutter TextPainter 测量
-  1. 把章节文本切成段落
-  2. 每段落用 TextPainter 计算实际渲染高度
-  3. 累计高度，达到页面可显示高度时切页
-  4. 输出：List<Page { startCharInChapter, endCharInChapter, content }>
-缓存：当前章节的分页结果。换章节、换字号、换行距、尺寸变化时重算
+输入：当前章节字符偏移 + 显示参数（屏幕宽/高、字号、行距、内边距、字体）
+处理：
+  1. 从当前位置读取有限大小的前向文本窗口，必要时跨分片拼接
+  2. 用 TextPainter 二分求出当前页能容纳的最长前缀
+  3. 向前翻页时读取有限后向窗口，求出能容纳的最长后缀
+  4. 输出：Page { startCharInChapter, endCharInChapter, content }
+缓存：有限页历史 + 有界分片文本 LRU；设置或尺寸变化时从当前字符偏移重新计算
 ```
 
-阅读页在 `_ReaderShellState` 侧缓存当前章节分页结果，缓存键为：
-
-```text
-chapterIndex | fontSize | lineHeight | contentWidth | contentHeight
-```
-
-主题色、书签列表、菜单显隐等不影响布局的状态不进入缓存键，避免加书签或菜单刷新时重复执行整章 `TextPainter` 分页。
-
-性能预算：单章节（1–3 万字）分页计算 ≤ 100 ms。
+探测窗口从较小容量开始，只有整窗仍不足一页时才倍增，并设置最大探测范围。页面历史和正文缓存均有上限，因此章节大小不会线性放大首屏布局时间或长期内存占用。底部展示章节百分比，不为取得总页数预先分页整章。
 
 ### 5.6 全文搜索（features/search/search_service.dart + core/db/text_index.dart）
 

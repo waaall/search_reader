@@ -1,12 +1,17 @@
 // 数据库增量迁移：正式 v1 作为基线，后续版本只逐级演进结构。
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
+import 'database_schema.dart';
+
 typedef DatabaseMigration = Future<void> Function(Database db);
 
 // key 表示迁移完成后的目标版本，例如 2 表示 v1 → v2。
-// 当前 v1 结构已经是最新基线，第一次改表时在这里登记 v2 迁移。
+// 每次结构升级都必须在这里登记对应目标版本。
 final Map<int, DatabaseMigration> _migrationsByTargetVersion =
-    <int, DatabaseMigration>{};
+    <int, DatabaseMigration>{
+      // 旧书不在迁移事务中扫描正文；首次打开具体章节时再流式补建。
+      2: DatabaseSchema.createRenderSegments,
+    };
 
 Future<void> migrateDatabase(
   Database db,

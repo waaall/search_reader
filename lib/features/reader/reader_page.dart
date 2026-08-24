@@ -1,13 +1,19 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../core/parser/render_segmenter.dart';
 import '../../domain/reader_settings.dart';
+import '../../domain/render_segment.dart';
 import '../../shared/l10n/app_l10n.dart';
 import '../../shared/theme/app_tokens.dart';
 import '../settings/settings_provider.dart';
 import 'bookmark_provider.dart';
-import 'pagination.dart';
+import 'lazy_chapter_paginator.dart';
 import 'reader_provider.dart';
+import 'segment_text_source.dart';
 import 'widgets/reader_drawer.dart';
 import 'widgets/reader_settings_sheet.dart';
 
@@ -83,12 +89,6 @@ class _ReaderShellState extends ConsumerState<_ReaderShell> {
   // 切换阅读模式、改字号等导致视图重建时用它保留当前位置；发生跳转后置空。
   int? _lastCharOffset;
 
-  // 分页结果缓存：仅当 (章节/字号/行距/可用宽高) 任一变化时重算
-  // 同一 _ReaderShell 内加书签等无关 rebuild 会触发 build()，
-  // 但分页输入未变，复用缓存避免主线程同步重新跑 TextPainter layout
-  Pagination? _cachedPagination;
-  String? _paginationCacheKey;
-
   // 内边距：上下留出顶部菜单与页码空间
   static const _padding = EdgeInsets.fromLTRB(20, 48, 20, 32);
 
@@ -116,38 +116,21 @@ class _ReaderShellState extends ConsumerState<_ReaderShell> {
     }
   }
 
-  // 按 (章节/字号/行距/可用宽高) 缓存分页结果；颜色等不影响布局，不入键
-  Pagination _paginate({
-    required String text,
-    required TextStyle style,
-    required double contentWidth,
-    required double contentHeight,
-    required int chapterIndex,
-    required String fontSizeName,
-    required String lineHeightName,
-  }) {
-    final key =
-        '$chapterIndex|$fontSizeName|$lineHeightName|${contentWidth.toInt()}|${contentHeight.toInt()}';
-    if (key == _paginationCacheKey && _cachedPagination != null) {
-      return _cachedPagination!;
-    }
-    final p = TextPaginator.paginate(
-      text: text,
-      style: style,
-      contentWidth: contentWidth,
-      contentHeight: contentHeight,
-    );
-    _paginationCacheKey = key;
-    _cachedPagination = p;
-    return p;
-  }
-
   @override
   Widget build(BuildContext context) {
     final state = widget.state;
     final settings = widget.settings;
     // 定位偏移：优先用最近阅读偏移（保留切模式/改设置前的位置），否则用初始偏移
     final effectiveOffset = _lastCharOffset ?? state.initialCharOffset;
+    final effectiveSegmentIndex = findSegmentIndexForChapterOffset(
+      state.currentChapterSegments,
+      state.currentChapter.startChar,
+      effectiveOffset,
+    );
+    final effectiveSegmentText =
+        effectiveSegmentIndex == state.initialSegmentIndex
+        ? state.initialSegmentText
+        : null;
     final textStyle = TextStyle(
       color: settings.theme.foreground,
       fontSize: settings.fontSize.size,
@@ -209,13 +192,21 @@ class _ReaderShellState extends ConsumerState<_ReaderShell> {
                     .saveProgress(offset);
               }
 
+              Future<String> loadSegment(int segmentIndex) => ref
+                  .read(readerProvider(widget.bookId).notifier)
+                  .readSegmentText(segmentIndex);
+
               // 滚动模式：无需分页计算
               if (settings.readingMode == ReadingMode.scroll) {
-                return _ScrollView(
+                return SegmentedScrollReaderView(
                   key: ValueKey(
                     's-${state.book.id}-${state.currentChapterIndex}-${state.jumpToken}-${settings.fontSize.name}-${settings.lineHeight.name}',
                   ),
-                  chapterText: state.currentChapterText,
+                  segments: state.currentChapterSegments,
+                  chapterStartChar: state.currentChapter.startChar,
+                  initialSegmentIndex: effectiveSegmentIndex,
+                  initialSegmentText: effectiveSegmentText,
+                  loadSegment: loadSegment,
                   padding: _padding,
                   textStyle: textStyle,
                   themeBg: settings.theme.background,
@@ -235,23 +226,21 @@ class _ReaderShellState extends ConsumerState<_ReaderShell> {
                 );
               }
 
-              // 翻页模式：仅此分支需要分页计算
+              // 翻页模式：按页探测有限文本窗口，不再同步分页整个章节。
               final contentWidth = constraints.maxWidth - _padding.horizontal;
               final contentHeight = constraints.maxHeight - _padding.vertical;
-              final pagination = _paginate(
-                text: state.currentChapterText,
-                style: textStyle,
-                contentWidth: contentWidth,
-                contentHeight: contentHeight,
-                chapterIndex: state.currentChapterIndex,
-                fontSizeName: settings.fontSize.name,
-                lineHeightName: settings.lineHeight.name,
-              );
-              return _PaginatedView(
+              return SegmentedPaginatedReaderView(
                 key: ValueKey(
                   'p-${state.book.id}-${state.currentChapterIndex}-${state.jumpToken}-${settings.fontSize.name}-${settings.lineHeight.name}-${constraints.maxWidth.toInt()}x${constraints.maxHeight.toInt()}',
                 ),
-                pagination: pagination,
+                segments: state.currentChapterSegments,
+                chapterStartChar: state.currentChapter.startChar,
+                initialSegmentIndex: effectiveSegmentIndex,
+                initialSegmentText: effectiveSegmentText,
+                initialCharOffset: effectiveOffset,
+                loadSegment: loadSegment,
+                contentWidth: contentWidth,
+                contentHeight: contentHeight,
                 padding: _padding,
                 textStyle: textStyle,
                 themeBg: settings.theme.background,
@@ -259,9 +248,7 @@ class _ReaderShellState extends ConsumerState<_ReaderShell> {
                 chapterTitle: state.currentChapter.title,
                 menuVisible: _menuVisible,
                 chapterBookmarkOffsets: chapterBookmarkOffsets,
-                initialPage: pagination.pageOfOffset(effectiveOffset),
-                onPageChanged: (pageIndex) =>
-                    reportOffset(pagination.offsetOfPage(pageIndex)),
+                onCharOffsetChanged: reportOffset,
                 onTapCenter: tapCenter,
                 onPrevChapter: onPrevChapter,
                 onNextChapter: onNextChapter,
@@ -367,8 +354,15 @@ class _BookmarkNoteDialogState extends State<_BookmarkNoteDialog> {
   }
 }
 
-class _PaginatedView extends StatefulWidget {
-  final Pagination pagination;
+class SegmentedPaginatedReaderView extends StatefulWidget {
+  final List<RenderSegment> segments;
+  final int chapterStartChar;
+  final int initialSegmentIndex;
+  final String? initialSegmentText;
+  final int initialCharOffset;
+  final SegmentTextReader loadSegment;
+  final double contentWidth;
+  final double contentHeight;
   final EdgeInsets padding;
   final TextStyle textStyle;
   final Color themeBg;
@@ -377,8 +371,7 @@ class _PaginatedView extends StatefulWidget {
   final bool menuVisible;
   // 当前章节内所有书签的字符偏移；用于判断"当前页是否含书签"
   final Set<int> chapterBookmarkOffsets;
-  final int initialPage;
-  final void Function(int) onPageChanged;
+  final void Function(int) onCharOffsetChanged;
   final VoidCallback onTapCenter;
   final VoidCallback? onPrevChapter;
   final VoidCallback? onNextChapter;
@@ -388,9 +381,16 @@ class _PaginatedView extends StatefulWidget {
   final void Function(int charOffset) onAddBookmark;
   final Future<void> Function(int charOffset) onBack;
 
-  const _PaginatedView({
+  const SegmentedPaginatedReaderView({
     super.key,
-    required this.pagination,
+    required this.segments,
+    required this.chapterStartChar,
+    required this.initialSegmentIndex,
+    required this.initialSegmentText,
+    required this.initialCharOffset,
+    required this.loadSegment,
+    required this.contentWidth,
+    required this.contentHeight,
     required this.padding,
     required this.textStyle,
     required this.themeBg,
@@ -398,8 +398,7 @@ class _PaginatedView extends StatefulWidget {
     required this.chapterTitle,
     required this.menuVisible,
     required this.chapterBookmarkOffsets,
-    required this.initialPage,
-    required this.onPageChanged,
+    required this.onCharOffsetChanged,
     required this.onTapCenter,
     required this.onPrevChapter,
     required this.onNextChapter,
@@ -410,69 +409,165 @@ class _PaginatedView extends StatefulWidget {
   });
 
   @override
-  State<_PaginatedView> createState() => _PaginatedViewState();
+  State<SegmentedPaginatedReaderView> createState() => _PaginatedViewState();
 }
 
-class _PaginatedViewState extends State<_PaginatedView> {
-  late final PageController _ctrl = PageController(
-    initialPage: widget.initialPage,
+class _PaginatedViewState extends State<SegmentedPaginatedReaderView> {
+  late final SegmentTextSource _source = SegmentTextSource(
+    segments: widget.segments,
+    chapterStartChar: widget.chapterStartChar,
+    readSegment: widget.loadSegment,
+    initialSegmentIndex: widget.initialSegmentIndex,
+    initialSegmentText: widget.initialSegmentText,
   );
-  int _currentPage = 0;
+  late final LazyChapterPaginator _paginator = LazyChapterPaginator(
+    source: _source,
+    style: widget.textStyle,
+    contentWidth: widget.contentWidth,
+    contentHeight: widget.contentHeight,
+  );
+  final List<ReaderPageSlice> _backPages = [];
+  final List<ReaderPageSlice> _forwardPages = [];
+  ReaderPageSlice? _current;
+  Object? _loadError;
+  bool _loading = true;
+  bool _movingForward = true;
 
   @override
   void initState() {
     super.initState();
-    _currentPage = widget.initialPage;
+    _source.prefetchAround(widget.initialSegmentIndex);
+    unawaited(_loadInitialPage());
   }
 
-  @override
-  void dispose() {
-    _ctrl.dispose();
-    super.dispose();
+  Future<void> _loadInitialPage() async {
+    try {
+      final page = await _paginator.pageFrom(widget.initialCharOffset);
+      if (!mounted) return;
+      setState(() {
+        _current = page;
+        _loading = false;
+      });
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _loadError = error;
+        _loading = false;
+      });
+    }
   }
 
-  Future<void> _animateToPage(int page) async {
-    if (!_ctrl.hasClients) return;
-    await _ctrl.animateToPage(
-      page,
-      duration: AppMotion.normal,
-      curve: AppMotion.easeOut,
+  Future<void> _goPrev() async {
+    final current = _current;
+    if (_loading || current == null) return;
+    if (current.startOffset <= 0) {
+      widget.onPrevChapter?.call();
+      return;
+    }
+    await _moveTo(
+      forward: false,
+      load: () => _backPages.isNotEmpty
+          ? Future.value(_backPages.removeLast())
+          : _paginator.pageEndingAt(current.startOffset),
     );
   }
 
-  void _goPrev() {
-    if (_currentPage > 0) {
-      _animateToPage(_currentPage - 1);
-    } else if (widget.onPrevChapter != null) {
-      widget.onPrevChapter!();
+  Future<void> _goNext() async {
+    final current = _current;
+    if (_loading || current == null) return;
+    if (current.endOffset >= _source.chapterCharCount) {
+      widget.onNextChapter?.call();
+      return;
+    }
+    await _moveTo(
+      forward: true,
+      load: () => _forwardPages.isNotEmpty
+          ? Future.value(_forwardPages.removeLast())
+          : _paginator.pageFrom(current.endOffset),
+    );
+  }
+
+  Future<void> _moveTo({
+    required bool forward,
+    required Future<ReaderPageSlice> Function() load,
+  }) async {
+    final previous = _current;
+    if (previous == null) return;
+    setState(() {
+      _loading = true;
+      _loadError = null;
+      _movingForward = forward;
+    });
+    try {
+      final page = await load();
+      if (!mounted) return;
+      if (forward) {
+        _backPages.add(previous);
+      } else {
+        _forwardPages.add(previous);
+      }
+      _trimHistory(forward ? _backPages : _forwardPages);
+      setState(() {
+        _current = page;
+        _loading = false;
+      });
+      widget.onCharOffsetChanged(page.startOffset);
+      _source.prefetchAround(_source.segmentIndexForOffset(page.startOffset));
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _loadError = error;
+        _loading = false;
+      });
     }
   }
 
-  void _goNext() {
-    if (_currentPage < widget.pagination.pageCount - 1) {
-      _animateToPage(_currentPage + 1);
-    } else if (widget.onNextChapter != null) {
-      widget.onNextChapter!();
-    }
+  void _trimHistory(List<ReaderPageSlice> pages) {
+    const limit = ReaderRenderPolicy.defaultPageHistoryCount;
+    if (pages.length > limit) pages.removeRange(0, pages.length - limit);
   }
 
   @override
   Widget build(BuildContext context) {
     final l10n = context.l10n;
+    final current = _current;
+    final progress = current == null || _source.chapterCharCount == 0
+        ? 0.0
+        : (current.startOffset / _source.chapterCharCount).clamp(0.0, 1.0);
     return Stack(
       children: [
-        // 文本页：点击左右区域时用短距离页面动画，保持纸书翻页感但不过度拟物
-        PageView.builder(
-          controller: _ctrl,
-          physics: const NeverScrollableScrollPhysics(),
-          itemCount: widget.pagination.pageCount,
-          onPageChanged: (i) {
-            setState(() => _currentPage = i);
-            widget.onPageChanged(i);
-          },
-          itemBuilder: (_, i) => Padding(
-            padding: widget.padding,
-            child: Text(widget.pagination.pages[i], style: widget.textStyle),
+        Positioned.fill(
+          child: AnimatedSwitcher(
+            duration: AppMotion.fast,
+            switchInCurve: AppMotion.easeOut,
+            transitionBuilder: (child, animation) => FadeTransition(
+              opacity: animation,
+              child: SlideTransition(
+                position: Tween<Offset>(
+                  begin: Offset(_movingForward ? 0.04 : -0.04, 0),
+                  end: Offset.zero,
+                ).animate(animation),
+                child: child,
+              ),
+            ),
+            child: _loadError != null
+                ? Center(
+                    key: const ValueKey('page-error'),
+                    child: Text(
+                      context.l10n.openBookFailed(_loadError!),
+                      style: widget.textStyle,
+                    ),
+                  )
+                : current == null
+                ? const Center(
+                    key: ValueKey('page-loading'),
+                    child: CircularProgressIndicator(),
+                  )
+                : Padding(
+                    key: ValueKey(current.startOffset),
+                    padding: widget.padding,
+                    child: Text(current.text, style: widget.textStyle),
+                  ),
           ),
         ),
         // 透明手势层
@@ -490,7 +585,7 @@ class _PaginatedViewState extends State<_PaginatedView> {
                     Expanded(
                       child: GestureDetector(
                         behavior: HitTestBehavior.translucent,
-                        onTap: _goPrev,
+                        onTap: () => unawaited(_goPrev()),
                       ),
                     ),
                     Expanded(
@@ -502,7 +597,7 @@ class _PaginatedViewState extends State<_PaginatedView> {
                     Expanded(
                       child: GestureDetector(
                         behavior: HitTestBehavior.translucent,
-                        onTap: _goNext,
+                        onTap: () => unawaited(_goNext()),
                       ),
                     ),
                   ],
@@ -518,18 +613,17 @@ class _PaginatedViewState extends State<_PaginatedView> {
             title: widget.chapterTitle,
             background: widget.themeBg,
             foreground: widget.themeFg,
-            onBack: () =>
-                widget.onBack(widget.pagination.offsetOfPage(_currentPage)),
+            onBack: () => widget.onBack(current?.startOffset ?? 0),
           ),
         ),
-        // 底部页码（始终显示，淡灰色不打扰）
+        // 总页数未知时只显示章节进度，避免为页码预先布局整章。
         Positioned(
           bottom: 8,
           left: 0,
           right: 0,
           child: Center(
             child: Text(
-              '${_currentPage + 1} / ${widget.pagination.pageCount}',
+              '${(progress * 100).toStringAsFixed(0)}%',
               style: TextStyle(
                 color: widget.themeFg.withValues(alpha: 0.5),
                 fontSize: 12,
@@ -550,7 +644,7 @@ class _PaginatedViewState extends State<_PaginatedView> {
               opacity: animation,
               child: ScaleTransition(scale: animation, child: child),
             ),
-            child: !widget.menuVisible && _currentPageHasBookmark()
+            child: !widget.menuVisible && _currentPageHasBookmark(current)
                 ? Icon(
                     Icons.bookmark,
                     key: const ValueKey('bookmark-visible'),
@@ -581,9 +675,8 @@ class _PaginatedViewState extends State<_PaginatedView> {
             onPrevChapter: widget.onPrevChapter,
             onNextChapter: widget.onNextChapter,
             onOpenChapters: widget.onOpenChapters,
-            onAddBookmark: () => widget.onAddBookmark(
-              widget.pagination.offsetOfPage(_currentPage),
-            ),
+            onAddBookmark: () =>
+                widget.onAddBookmark(current?.startOffset ?? 0),
             onOpenSettings: widget.onOpenSettings,
           ),
         ),
@@ -592,12 +685,10 @@ class _PaginatedViewState extends State<_PaginatedView> {
   }
 
   // 当前页 [pageStart, pageEnd) 范围内是否有书签
-  bool _currentPageHasBookmark() {
-    if (widget.chapterBookmarkOffsets.isEmpty) return false;
-    final pageStart = widget.pagination.offsetOfPage(_currentPage);
-    final pageEnd = pageStart + widget.pagination.pages[_currentPage].length;
+  bool _currentPageHasBookmark(ReaderPageSlice? page) {
+    if (page == null || widget.chapterBookmarkOffsets.isEmpty) return false;
     for (final off in widget.chapterBookmarkOffsets) {
-      if (off >= pageStart && off < pageEnd) return true;
+      if (off >= page.startOffset && off < page.endOffset) return true;
     }
     return false;
   }
@@ -876,8 +967,13 @@ class _ReaderChapterButton extends StatelessWidget {
 
 // ─── 滚动阅读视图 ────────────────────────────────────────────────
 
-class _ScrollView extends StatefulWidget {
-  final String chapterText;
+class SegmentedScrollReaderView extends StatefulWidget {
+  final List<RenderSegment> segments;
+  final int chapterStartChar;
+  final int initialSegmentIndex;
+  final String? initialSegmentText;
+  final SegmentTextReader loadSegment;
+  final ScrollController? controller;
   final EdgeInsets padding;
   final TextStyle textStyle;
   final Color themeBg;
@@ -894,9 +990,14 @@ class _ScrollView extends StatefulWidget {
   final void Function(int charOffset) onAddBookmark;
   final Future<void> Function(int charOffset) onBack;
 
-  const _ScrollView({
+  const SegmentedScrollReaderView({
     super.key,
-    required this.chapterText,
+    required this.segments,
+    required this.chapterStartChar,
+    required this.initialSegmentIndex,
+    required this.initialSegmentText,
+    required this.loadSegment,
+    this.controller,
     required this.padding,
     required this.textStyle,
     required this.themeBg,
@@ -915,52 +1016,182 @@ class _ScrollView extends StatefulWidget {
   });
 
   @override
-  State<_ScrollView> createState() => _ScrollViewState();
+  State<SegmentedScrollReaderView> createState() => _ScrollViewState();
 }
 
-class _ScrollViewState extends State<_ScrollView> {
+class _ScrollViewState extends State<SegmentedScrollReaderView> {
   late final ScrollController _ctrl;
+  late final SegmentTextSource _source = SegmentTextSource(
+    segments: widget.segments,
+    chapterStartChar: widget.chapterStartChar,
+    readSegment: widget.loadSegment,
+    initialSegmentIndex: widget.initialSegmentIndex,
+    initialSegmentText: widget.initialSegmentText,
+  );
+  final GlobalKey _centerKey = GlobalKey();
+  final GlobalKey _viewportKey = GlobalKey();
+  final Map<int, GlobalKey> _segmentKeys = {};
+  bool _didPositionInitially = false;
+  Timer? _progressReportTimer;
+  late int _latestCharOffset = widget.initialCharOffset;
   // 阅读进度百分比：用 ValueNotifier 单独驱动底部百分比刷新，
-  // 避免滚动时 setState 重建整个视图（含大段正文 Text）
+  // 避免滚动时 setState 重建正文分片。
   final ValueNotifier<double> _progress = ValueNotifier(0.0);
 
   @override
   void initState() {
     super.initState();
-    _ctrl = ScrollController();
+    _ctrl = widget.controller ?? ScrollController();
     _ctrl.addListener(_onScroll);
-    // 首帧渲染完成后按字符偏移比例滚动到初始位置
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted || !_ctrl.hasClients) return;
-      final max = _ctrl.position.maxScrollExtent;
-      if (max > 0 && widget.chapterText.isNotEmpty) {
-        final ratio = widget.initialCharOffset / widget.chapterText.length;
-        _ctrl.jumpTo((ratio * max).clamp(0.0, max));
-      }
-    });
+    final count = _source.chapterCharCount;
+    _progress.value = count == 0
+        ? 0
+        : (widget.initialCharOffset / count).clamp(0.0, 1.0);
+    _source.prefetchAround(widget.initialSegmentIndex);
   }
 
   @override
   void dispose() {
-    _ctrl.dispose();
+    _progressReportTimer?.cancel();
+    if (widget.controller == null) _ctrl.dispose();
     _progress.dispose();
     super.dispose();
   }
 
   void _onScroll() {
-    if (!_ctrl.hasClients) return;
-    final max = _ctrl.position.maxScrollExtent;
-    if (max <= 0) return;
-    final p = (_ctrl.offset / max).clamp(0.0, 1.0);
+    final offset = _currentCharOffset;
+    _latestCharOffset = offset;
+    final count = _source.chapterCharCount;
+    final p = count == 0 ? 0.0 : (offset / count).clamp(0.0, 1.0);
     if ((p - _progress.value).abs() > 0.001) _progress.value = p;
+    _source.prefetchAround(_source.segmentIndexForOffset(offset));
+    _progressReportTimer?.cancel();
+    _progressReportTimer = Timer(const Duration(milliseconds: 250), () {
+      if (mounted) widget.onCharOffsetChanged(_latestCharOffset);
+    });
   }
 
+  Future<void> _positionInitially() async {
+    if (!mounted || !_ctrl.hasClients) return;
+    final segment = widget.segments[widget.initialSegmentIndex];
+    final box = _boxForSegment(widget.initialSegmentIndex);
+    if (box == null || segment.charCount == 0) return;
+    final viewport = RenderAbstractViewport.of(box);
+    final segmentStart = segment.startChar - widget.chapterStartChar;
+    final localOffset = (widget.initialCharOffset - segmentStart).clamp(
+      0,
+      segment.charCount,
+    );
+    final ratio = localOffset / segment.charCount;
+    final segmentOffset = viewport.getOffsetToReveal(box, 0).offset;
+    final target = segmentOffset + box.size.height * ratio;
+    final position = _ctrl.position;
+    _ctrl.jumpTo(
+      target.clamp(position.minScrollExtent, position.maxScrollExtent),
+    );
+  }
+
+  RenderBox? _boxForSegment(int index) =>
+      _segmentKeys[index]?.currentContext?.findRenderObject() as RenderBox?;
+
   int get _currentCharOffset {
-    if (!_ctrl.hasClients) return widget.initialCharOffset;
-    final max = _ctrl.position.maxScrollExtent;
-    if (max <= 0) return 0;
-    final ratio = (_ctrl.offset / max).clamp(0.0, 1.0);
-    return (ratio * widget.chapterText.length).round();
+    if (!_ctrl.hasClients || widget.segments.isEmpty) {
+      return widget.initialCharOffset;
+    }
+    int? selectedIndex;
+    RenderBox? selectedBox;
+    var nearestTop = double.infinity;
+    for (final entry in _segmentKeys.entries) {
+      final box = entry.value.currentContext?.findRenderObject() as RenderBox?;
+      if (box == null || !box.attached || box.size.height <= 0) continue;
+      final viewport = RenderAbstractViewport.of(box);
+      final itemStart = viewport.getOffsetToReveal(box, 0).offset;
+      final itemEnd = itemStart + box.size.height;
+      if (itemStart <= _ctrl.offset && itemEnd > _ctrl.offset) {
+        selectedIndex = entry.key;
+        selectedBox = box;
+        break;
+      }
+      final distance = (itemStart - _ctrl.offset).abs();
+      if (distance < nearestTop) {
+        nearestTop = distance;
+        selectedIndex = entry.key;
+        selectedBox = box;
+      }
+    }
+    if (selectedIndex == null || selectedBox == null) {
+      return widget.initialCharOffset;
+    }
+    final viewport = RenderAbstractViewport.of(selectedBox);
+    final itemStart = viewport.getOffsetToReveal(selectedBox, 0).offset;
+    final ratio = ((_ctrl.offset - itemStart) / selectedBox.size.height).clamp(
+      0.0,
+      1.0,
+    );
+    final segment = widget.segments[selectedIndex];
+    final segmentStart = segment.startChar - widget.chapterStartChar;
+    return (segmentStart + segment.charCount * ratio).round().clamp(
+      0,
+      _source.chapterCharCount,
+    );
+  }
+
+  Widget _segmentItem(BuildContext context, int index) {
+    final key = _segmentKeys.putIfAbsent(index, GlobalKey.new);
+    final top = index == 0 ? widget.padding.top : 0.0;
+    final bottom = index == widget.segments.length - 1
+        ? widget.padding.bottom
+        : 0.0;
+    return Padding(
+      padding: EdgeInsets.fromLTRB(
+        widget.padding.left,
+        top,
+        widget.padding.right,
+        bottom,
+      ),
+      child: FutureBuilder<String>(
+        future: _source.textAt(index),
+        builder: (context, snapshot) {
+          if (snapshot.hasError) {
+            return Text(
+              context.l10n.openBookFailed(snapshot.error!),
+              key: key,
+              style: widget.textStyle,
+            );
+          }
+          final text = snapshot.data;
+          if (text == null) {
+            return SizedBox(
+              key: key,
+              // 使用字符数估算占位高度，避免短占位让 Sliver 一次触发大量远处分片读取。
+              height: _estimatedSegmentHeight(context, index),
+              child: const Center(child: CircularProgressIndicator()),
+            );
+          }
+          if (index == widget.initialSegmentIndex && !_didPositionInitially) {
+            _didPositionInitially = true;
+            WidgetsBinding.instance.addPostFrameCallback(
+              (_) => _positionInitially(),
+            );
+          }
+          return Text(text, key: key, style: widget.textStyle);
+        },
+      ),
+    );
+  }
+
+  double _estimatedSegmentHeight(BuildContext context, int index) {
+    final availableWidth =
+        MediaQuery.sizeOf(context).width - widget.padding.horizontal;
+    final fontSize = widget.textStyle.fontSize ?? 16;
+    final lineHeight = widget.textStyle.height ?? 1.2;
+    final approximateGlyphWidth = fontSize * 0.65;
+    final charsPerLine = (availableWidth / approximateGlyphWidth).clamp(
+      1.0,
+      double.infinity,
+    );
+    final lines = (widget.segments[index].charCount / charsPerLine).ceil();
+    return (lines * fontSize * lineHeight).clamp(72.0, double.infinity);
   }
 
   @override
@@ -968,25 +1199,47 @@ class _ScrollViewState extends State<_ScrollView> {
     final l10n = context.l10n;
     return Stack(
       children: [
-        // 连续滚动文本；停止滚动时保存进度
-        NotificationListener<ScrollEndNotification>(
-          onNotification: (_) {
-            widget.onCharOffsetChanged(_currentCharOffset);
-            return false;
-          },
-          child: SingleChildScrollView(
-            controller: _ctrl,
-            padding: widget.padding,
-            child: Text(widget.chapterText, style: widget.textStyle),
-          ),
-        ),
-        // 透明手势层：点击任意处切换菜单
-        // translucent 让下层滚动手势仍能响应（点击=切菜单，拖动=滚动）
-        // 放在顶/底栏之前 → 顶/底栏 z 序更高，按钮点击优先命中
+        // center 让任意目标分片都能作为初始位置，前后列表仍保持连续滚动和懒构建。
         Positioned.fill(
-          child: GestureDetector(
-            behavior: HitTestBehavior.translucent,
-            onTap: widget.onTapCenter,
+          child: SizedBox(
+            key: _viewportKey,
+            child: NotificationListener<ScrollEndNotification>(
+              onNotification: (_) {
+                _latestCharOffset = _currentCharOffset;
+                widget.onCharOffsetChanged(_latestCharOffset);
+                return false;
+              },
+              child: GestureDetector(
+                behavior: HitTestBehavior.translucent,
+                onTap: widget.onTapCenter,
+                child: CustomScrollView(
+                  controller: _ctrl,
+                  center: _centerKey,
+                  slivers: [
+                    SliverList(
+                      delegate: SliverChildBuilderDelegate(
+                        (context, index) => _segmentItem(
+                          context,
+                          widget.initialSegmentIndex - index - 1,
+                        ),
+                        childCount: widget.initialSegmentIndex,
+                      ),
+                    ),
+                    SliverList(
+                      key: _centerKey,
+                      delegate: SliverChildBuilderDelegate(
+                        (context, index) => _segmentItem(
+                          context,
+                          widget.initialSegmentIndex + index,
+                        ),
+                        childCount:
+                            widget.segments.length - widget.initialSegmentIndex,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
           ),
         ),
         // 顶部章节标题：滚动阅读与翻页阅读保持同一套菜单动效

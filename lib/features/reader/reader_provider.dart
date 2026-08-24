@@ -1,26 +1,31 @@
-// 阅读器状态管理：加载书籍、章节、分页、进度与书签状态。
+// 阅读器状态管理：逻辑章节保持稳定，正文只按内部渲染分片读取。
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/db/daos.dart';
+import '../../core/db/render_segment_service.dart';
 import '../../core/storage/book_storage.dart';
 import '../../domain/book.dart';
 import '../../domain/chapter.dart';
 import '../../domain/reading_progress.dart';
+import '../../domain/render_segment.dart';
 
-// 阅读器状态：当前书 + 章节列表 + 当前章节正文 + 初始字符偏移
 class ReaderState {
   final Book book;
   final List<Chapter> chapters;
   final int currentChapterIndex;
-  final String currentChapterText;
-  final int initialCharOffset; // 第一次进入页面时的章节内偏移
-  final int jumpToken; // 跳转计数：每次跳章/跳书签自增，用于强制阅读视图重建
+  final List<RenderSegment> currentChapterSegments;
+  final int initialSegmentIndex;
+  final String initialSegmentText;
+  final int initialCharOffset;
+  final int jumpToken;
 
   const ReaderState({
     required this.book,
     required this.chapters,
     required this.currentChapterIndex,
-    required this.currentChapterText,
+    required this.currentChapterSegments,
+    required this.initialSegmentIndex,
+    required this.initialSegmentText,
     required this.initialCharOffset,
     this.jumpToken = 0,
   });
@@ -31,7 +36,9 @@ class ReaderState {
 
   ReaderState copyWith({
     int? currentChapterIndex,
-    String? currentChapterText,
+    List<RenderSegment>? currentChapterSegments,
+    int? initialSegmentIndex,
+    String? initialSegmentText,
     int? initialCharOffset,
     int? jumpToken,
   }) {
@@ -39,7 +46,10 @@ class ReaderState {
       book: book,
       chapters: chapters,
       currentChapterIndex: currentChapterIndex ?? this.currentChapterIndex,
-      currentChapterText: currentChapterText ?? this.currentChapterText,
+      currentChapterSegments:
+          currentChapterSegments ?? this.currentChapterSegments,
+      initialSegmentIndex: initialSegmentIndex ?? this.initialSegmentIndex,
+      initialSegmentText: initialSegmentText ?? this.initialSegmentText,
       initialCharOffset: initialCharOffset ?? this.initialCharOffset,
       jumpToken: jumpToken ?? this.jumpToken,
     );
@@ -50,17 +60,15 @@ class ReaderNotifier extends AutoDisposeFamilyAsyncNotifier<ReaderState, int> {
   final BookDao _bookDao = BookDao();
   final ChapterDao _chapterDao = ChapterDao();
   final ProgressDao _progressDao = ProgressDao();
+  final RenderSegmentService _segmentService = RenderSegmentService();
 
-  // 阅读进度写入队列：翻页、跳章、退出阅读页可能连续触发保存。
-  // 串行化写库可避免较早的异步 save 后完成，反向覆盖较新的阅读位置。
   Future<void> _progressSaveQueue = Future.value();
+  int _navigationToken = 0;
 
   @override
   Future<ReaderState> build(int bookId) async {
     final book = await _bookDao.findById(bookId);
-    if (book == null) {
-      throw StateError('Book not found: id=$bookId');
-    }
+    if (book == null) throw StateError('Book not found: id=$bookId');
     final chapters = await _chapterDao.listByBook(bookId);
     if (chapters.isEmpty) {
       throw StateError('Book has no chapter data: id=$bookId');
@@ -70,38 +78,43 @@ class ReaderNotifier extends AutoDisposeFamilyAsyncNotifier<ReaderState, int> {
       0,
       chapters.length - 1,
     );
+    final chapter = chapters[initialIndex];
+    final offset = (progress?.charOffset ?? 0).clamp(0, chapter.charCount);
+    final loaded = await _loadChapter(book, chapter, offset);
 
-    final text = await _readChapter(book, chapters[initialIndex]);
-
-    // 更新最近阅读时间（不阻塞返回）
     await _bookDao.updateLastRead(bookId);
-
     return ReaderState(
       book: book,
       chapters: chapters,
       currentChapterIndex: initialIndex,
-      currentChapterText: text,
-      initialCharOffset: progress?.charOffset ?? 0,
+      currentChapterSegments: loaded.segments,
+      initialSegmentIndex: loaded.segmentIndex,
+      initialSegmentText: loaded.text,
+      initialCharOffset: offset,
     );
   }
 
-  // 跳转到指定章节
   Future<void> jumpToChapter(int chapterIndex, {int charOffset = 0}) async {
     final cur = state.value;
     if (cur == null) return;
-    final clamped = chapterIndex.clamp(0, cur.chapters.length - 1);
-    final text = await _readChapter(cur.book, cur.chapters[clamped]);
+    final requestToken = ++_navigationToken;
+    final clampedIndex = chapterIndex.clamp(0, cur.chapters.length - 1);
+    final chapter = cur.chapters[clampedIndex];
+    final clampedOffset = charOffset.clamp(0, chapter.charCount);
+    final loaded = await _loadChapter(cur.book, chapter, clampedOffset);
+    if (requestToken != _navigationToken || state.value == null) return;
+
     state = AsyncData(
       cur.copyWith(
-        currentChapterIndex: clamped,
-        currentChapterText: text,
-        initialCharOffset: charOffset,
-        jumpToken: cur.jumpToken + 1, // 自增以强制阅读视图按新位置重建
+        currentChapterIndex: clampedIndex,
+        currentChapterSegments: loaded.segments,
+        initialSegmentIndex: loaded.segmentIndex,
+        initialSegmentText: loaded.text,
+        initialCharOffset: clampedOffset,
+        jumpToken: cur.jumpToken + 1,
       ),
     );
-    // 跳目录 / 书签 / 搜索结果 / 上下章后，立即把新位置作为阅读进度落库。
-    // 否则返回书架再打开，会回到跳转前的位置。
-    await _saveProgressFor(cur.book.id, clamped, charOffset);
+    await _saveProgressFor(cur.book.id, clampedIndex, clampedOffset);
   }
 
   Future<void> nextChapter() async {
@@ -118,25 +131,75 @@ class ReaderNotifier extends AutoDisposeFamilyAsyncNotifier<ReaderState, int> {
     }
   }
 
-  // 保存当前阅读进度（widget 在翻页时调用）
+  // 视图按索引读取单个分片；返回前校验字符长度，尽早暴露范围损坏。
+  Future<String> readSegmentText(int segmentIndex) async {
+    final cur = state.value;
+    if (cur == null) throw StateError('阅读器尚未加载完成');
+    if (segmentIndex < 0 || segmentIndex >= cur.currentChapterSegments.length) {
+      throw RangeError.index(
+        segmentIndex,
+        cur.currentChapterSegments,
+        'segmentIndex',
+      );
+    }
+    return _readSegment(cur.book, cur.currentChapterSegments[segmentIndex]);
+  }
+
   Future<void> saveProgress(int charOffsetInChapter) async {
     final cur = state.value;
     if (cur == null) return;
     final clampedOffset = charOffsetInChapter.clamp(
       0,
-      cur.currentChapterText.length,
+      cur.currentChapter.charCount,
     );
-
-    // 同步更新内存态：如果阅读页返回后 readerProvider 尚未被 autoDispose 销毁，
-    // 再次打开同一本书会复用当前 ReaderState。只写数据库会导致"重启 App 才生效"。
     if (cur.initialCharOffset != clampedOffset) {
       state = AsyncData(cur.copyWith(initialCharOffset: clampedOffset));
     }
-
     await _saveProgressFor(cur.book.id, cur.currentChapterIndex, clampedOffset);
   }
 
-  // 串行保存指定位置，确保调用顺序就是数据库最终顺序。
+  Future<_LoadedChapter> _loadChapter(
+    Book book,
+    Chapter chapter,
+    int charOffset,
+  ) async {
+    final segments = await _segmentService.ensureForChapter(book, chapter);
+    final segmentIndex = _segmentIndexForOffset(segments, chapter, charOffset);
+    final text = await _readSegment(book, segments[segmentIndex]);
+    return _LoadedChapter(
+      segments: segments,
+      segmentIndex: segmentIndex,
+      text: text,
+    );
+  }
+
+  int _segmentIndexForOffset(
+    List<RenderSegment> segments,
+    Chapter chapter,
+    int chapterOffset,
+  ) {
+    final globalOffset = chapter.startChar + chapterOffset;
+    for (var index = 0; index < segments.length; index++) {
+      if (globalOffset < segments[index].endChar ||
+          index == segments.length - 1) {
+        return index;
+      }
+    }
+    return segments.length - 1;
+  }
+
+  Future<String> _readSegment(Book book, RenderSegment segment) async {
+    final text = await BookStorage.shared.readTextRange(
+      book.filePath,
+      startByte: segment.startByte,
+      endByte: segment.endByte,
+    );
+    if (text.length != segment.charCount) {
+      throw StateError('渲染分片字符范围与 UTF-8 字节范围不一致');
+    }
+    return text;
+  }
+
   Future<void> _saveProgressFor(
     int bookId,
     int chapterIndex,
@@ -149,25 +212,22 @@ class ReaderNotifier extends AutoDisposeFamilyAsyncNotifier<ReaderState, int> {
       updatedAt: DateTime.now(),
     );
     final save = _progressSaveQueue.then((_) => _progressDao.save(progress));
-    // 队列本身吞掉异常，避免一次失败导致后续进度保存都被短路；
-    // 当前调用仍返回原始 Future，让调用方可感知失败。
     _progressSaveQueue = save.catchError((_) {});
     return save;
   }
-
-  // 阅读器只加载当前章节；当前数据库中的章节都带有有效 UTF-8 字节范围。
-  Future<String> _readChapter(Book book, Chapter chapter) {
-    return BookStorage.shared.readChapterText(
-      book.filePath,
-      startChar: chapter.startChar,
-      endChar: chapter.endChar,
-      startByte: chapter.startByte,
-      endByte: chapter.endByte,
-    );
-  }
 }
 
-// autoDispose：退出阅读页后销毁 provider，
-// 重新进入时 build() 会重新从数据库读取阅读进度，确保定位到上次位置
+class _LoadedChapter {
+  final List<RenderSegment> segments;
+  final int segmentIndex;
+  final String text;
+
+  const _LoadedChapter({
+    required this.segments,
+    required this.segmentIndex,
+    required this.text,
+  });
+}
+
 final readerProvider = AsyncNotifierProvider.autoDispose
     .family<ReaderNotifier, ReaderState, int>(ReaderNotifier.new);

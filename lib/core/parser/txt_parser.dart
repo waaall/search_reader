@@ -4,6 +4,7 @@ import '../encoding/text_decoder.dart';
 import 'book_format.dart';
 import 'import_limits.dart';
 import 'normalized_text_writer.dart';
+import 'render_segmenter.dart';
 
 // txt 章节标题正则：覆盖中文小说常见模式
 // - 第X章/节/回/部/卷（X 支持中文数字与阿拉伯数字）
@@ -54,6 +55,7 @@ class TxtParser implements BookFormatParser {
     _checkTextLimit(fullText, limits);
 
     final spans = splitChapterSpans(fullText);
+    const segmenter = RenderSegmenter();
     final writer = await NormalizedTextWriter.open(outputPath);
     final descriptors = <ChapterDescriptor>[];
     try {
@@ -65,7 +67,24 @@ class TxtParser implements BookFormatParser {
         }
         final startChar = writer.charCount;
         final startByte = writer.byteCount;
-        await _writeTextRange(writer, fullText, span.startChar, span.endChar);
+        final renderSegments = <RenderSegmentDescriptor>[];
+        for (final range in segmenter.splitRange(
+          fullText,
+          span.startChar,
+          span.endChar,
+        )) {
+          final segmentStartChar = writer.charCount;
+          final segmentStartByte = writer.byteCount;
+          await _writeTextRange(writer, fullText, range.start, range.end);
+          renderSegments.add(
+            RenderSegmentDescriptor(
+              startChar: segmentStartChar,
+              endChar: writer.charCount,
+              startByte: segmentStartByte,
+              endByte: writer.byteCount,
+            ),
+          );
+        }
         descriptors.add(
           ChapterDescriptor(
             title: span.title,
@@ -73,6 +92,7 @@ class TxtParser implements BookFormatParser {
             endChar: writer.charCount,
             startByte: startByte,
             endByte: writer.byteCount,
+            renderSegments: renderSegments,
           ),
         );
         cursorChar = span.endChar;

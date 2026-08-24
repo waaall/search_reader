@@ -11,6 +11,7 @@ import 'book_format.dart';
 import 'epub_structure.dart';
 import 'import_limits.dart';
 import 'normalized_text_writer.dart';
+import 'render_segmenter.dart';
 
 class EpubParseException implements Exception {
   final String message;
@@ -90,6 +91,7 @@ class EpubParser implements BookFormatParser {
       final archive = ZipDecoder().decodeBytes(bytes);
       final sources = _structureReader.read(archive);
       final descriptors = <ChapterDescriptor>[];
+      const segmenter = RenderSegmenter();
 
       for (var i = 0; i < sources.length; i++) {
         final rendered = _renderChapter(sources[i], i, limits: limits);
@@ -99,9 +101,25 @@ class EpubParser implements BookFormatParser {
         if (writer.charCount > 0) await writer.write('\n\n');
         final startChar = writer.charCount;
         final startByte = writer.byteCount;
-        await writer.write(title);
-        await writer.write('\n\n');
-        await writer.write(content);
+        final chapterText = '$title\n\n$content';
+        final renderSegments = <RenderSegmentDescriptor>[];
+        for (final range in segmenter.splitRange(
+          chapterText,
+          0,
+          chapterText.length,
+        )) {
+          final segmentStartChar = writer.charCount;
+          final segmentStartByte = writer.byteCount;
+          await writer.write(chapterText.substring(range.start, range.end));
+          renderSegments.add(
+            RenderSegmentDescriptor(
+              startChar: segmentStartChar,
+              endChar: writer.charCount,
+              startByte: segmentStartByte,
+              endByte: writer.byteCount,
+            ),
+          );
+        }
         _checkTextLimit(writer.charCount, limits);
         descriptors.add(
           ChapterDescriptor(
@@ -110,6 +128,7 @@ class EpubParser implements BookFormatParser {
             endChar: writer.charCount,
             startByte: startByte,
             endByte: writer.byteCount,
+            renderSegments: renderSegments,
           ),
         );
       }
@@ -125,6 +144,14 @@ class EpubParser implements BookFormatParser {
             endChar: writer.charCount,
             startByte: startByte,
             endByte: writer.byteCount,
+            renderSegments: [
+              RenderSegmentDescriptor(
+                startChar: startChar,
+                endChar: writer.charCount,
+                startByte: startByte,
+                endByte: writer.byteCount,
+              ),
+            ],
           ),
         );
       }

@@ -31,12 +31,45 @@ class ParsedBook {
 }
 
 // 已写入规范化正文文件的章节范围；正文本身不跨 isolate 传回主 isolate。
+class RenderSegmentDescriptor {
+  final int startChar;
+  final int endChar;
+  final int startByte;
+  final int endByte;
+
+  const RenderSegmentDescriptor({
+    required this.startChar,
+    required this.endChar,
+    required this.startByte,
+    required this.endByte,
+  });
+
+  int get charCount => endChar - startChar;
+
+  Map<String, Object?> toMap() => {
+    'startChar': startChar,
+    'endChar': endChar,
+    'startByte': startByte,
+    'endByte': endByte,
+  };
+
+  factory RenderSegmentDescriptor.fromMap(Map<Object?, Object?> map) {
+    return RenderSegmentDescriptor(
+      startChar: map['startChar']! as int,
+      endChar: map['endChar']! as int,
+      startByte: map['startByte']! as int,
+      endByte: map['endByte']! as int,
+    );
+  }
+}
+
 class ChapterDescriptor {
   final String title;
   final int startChar;
   final int endChar;
   final int startByte;
   final int endByte;
+  final List<RenderSegmentDescriptor> renderSegments;
 
   const ChapterDescriptor({
     required this.title,
@@ -44,6 +77,7 @@ class ChapterDescriptor {
     required this.endChar,
     required this.startByte,
     required this.endByte,
+    this.renderSegments = const [],
   });
 
   Map<String, Object?> toMap() => {
@@ -52,15 +86,26 @@ class ChapterDescriptor {
     'endChar': endChar,
     'startByte': startByte,
     'endByte': endByte,
+    'renderSegments': renderSegments
+        .map((segment) => segment.toMap())
+        .toList(growable: false),
   };
 
   factory ChapterDescriptor.fromMap(Map<Object?, Object?> map) {
+    final rawSegments = map['renderSegments'] as List<Object?>? ?? const [];
     return ChapterDescriptor(
       title: map['title']! as String,
       startChar: map['startChar']! as int,
       endChar: map['endChar']! as int,
       startByte: map['startByte']! as int,
       endByte: map['endByte']! as int,
+      renderSegments: rawSegments
+          .map(
+            (segment) => RenderSegmentDescriptor.fromMap(
+              segment! as Map<Object?, Object?>,
+            ),
+          )
+          .toList(growable: false),
     );
   }
 }
