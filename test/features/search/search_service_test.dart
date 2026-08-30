@@ -130,12 +130,32 @@ void main() {
     expect(result.hits.single.charOffset, content.indexOf('Alice'));
     expect(result.hits.single.snippet, contains('<mark>Alice</mark>'));
   });
+
+  test('仅命中章节标题时保留章节开头作为回退结果', () async {
+    const content = '这段正文不包含查询词，只用于验证章节开头摘要。';
+    final service = SearchService(
+      dao: _FakeSearchDao([
+        _row(bookId: 1, title: '书', chapterTitle: '搜索目标', content: content),
+      ]),
+      storage: _FakeBookStorage({1: content}, chunkChars: 5),
+    );
+
+    final result = await service.search('搜索目标');
+
+    expect(result.hits, hasLength(1));
+    expect(result.hits.single.chapterTitle, '搜索目标');
+    expect(result.hits.single.charOffset, 0);
+    expect(result.hits.single.matchLength, 0);
+    expect(result.hits.single.snippet, startsWith('这段正文'));
+    expect(result.hits.single.snippet, isNot(contains('<mark>')));
+  });
 }
 
 ChapterMatchRow _row({
   required int bookId,
   required String title,
   required String content,
+  String chapterTitle = '第一章',
   String? filePath,
 }) {
   return ChapterMatchRow(
@@ -144,7 +164,7 @@ ChapterMatchRow _row({
     bookFilePath: filePath ?? 'books/$bookId.txt',
     chapterId: bookId,
     chapterIndex: 0,
-    chapterTitle: '第一章',
+    chapterTitle: chapterTitle,
     chapterStart: 0,
     chapterEnd: content.length,
     chapterStartByte: 0,

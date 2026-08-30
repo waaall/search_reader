@@ -106,8 +106,10 @@ class SearchService {
     SearchCancellationCheck? isCancelled,
   }) async {
     const contextChars = 24;
+    const fallbackChars = contextChars * 2;
     final retainChars = contextChars + _maxSearchTermLength(rawQuery) + 1;
     var buffer = '';
+    var head = '';
     var bufferStartChar = 0;
     var searchFrom = 0;
     final excerpts = <_SearchExcerpt>[];
@@ -118,6 +120,14 @@ class SearchService {
       endByte: match.chapterEndByte,
     )) {
       if (isCancelled?.call() ?? false) return null;
+      if (head.length <= fallbackChars) {
+        final candidate = head + chunk;
+        final headEnd = _safePrefixEnd(
+          candidate,
+          (fallbackChars + 1).clamp(0, candidate.length),
+        );
+        head = candidate.substring(0, headEnd);
+      }
       buffer += chunk;
       while (true) {
         final found = findNextTextMatch(
@@ -180,6 +190,20 @@ class SearchService {
         return _ChapterSearchResult(excerpts: excerpts, hasMore: hasAnother);
       }
       searchFrom = found.endOffset;
+    }
+
+    // FTS 同时索引章节标题和正文；标题命中或 unicode61 归一化命中时，
+    // 正文可能没有可定位的字面文本。保留该候选并跳到章节开头。
+    if (excerpts.isEmpty) {
+      return _ChapterSearchResult(
+        excerpts: [
+          _SearchExcerpt(
+            snippet: makeSnippet(head, '', contextChars: contextChars),
+            charOffset: 0,
+            matchLength: 0,
+          ),
+        ],
+      );
     }
 
     return _ChapterSearchResult(excerpts: excerpts);
