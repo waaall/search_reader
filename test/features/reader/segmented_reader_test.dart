@@ -154,6 +154,58 @@ void main() {
     await tester.pump(const Duration(milliseconds: 300));
     expect(reportedOffset, lessThan(segments[40].startChar));
   });
+
+  testWidgets('滚动到章节末尾后只触发一次下一章', (tester) async {
+    final parts = List.generate(3, (index) => '分片$index ${'正文' * 600}\n');
+    final segments = _segmentsFor(parts);
+    var nextCount = 0;
+
+    await tester.pumpWidget(
+      MaterialApp(
+        localizationsDelegates: const [
+          AppLocalizations.delegate,
+          GlobalMaterialLocalizations.delegate,
+          GlobalWidgetsLocalizations.delegate,
+          GlobalCupertinoLocalizations.delegate,
+        ],
+        supportedLocales: AppLocalizations.supportedLocales,
+        home: Scaffold(
+          body: SegmentedScrollReaderView(
+            segments: segments,
+            chapterStartChar: 0,
+            initialSegmentIndex: 0,
+            initialSegmentText: parts.first,
+            loadSegment: (index) async => parts[index],
+            padding: const EdgeInsets.fromLTRB(20, 48, 20, 32),
+            textStyle: const TextStyle(fontSize: 18, height: 1.7),
+            themeBg: Colors.white,
+            themeFg: Colors.black,
+            chapterTitle: '正文',
+            menuVisible: false,
+            initialCharOffset: 0,
+            onCharOffsetChanged: (_) {},
+            onTapCenter: () {},
+            onPrevChapter: null,
+            onNextChapter: () async {
+              nextCount++;
+            },
+            onOpenChapters: () {},
+            onOpenSettings: () {},
+            onAddBookmark: (_) {},
+            onBack: (_) async {},
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.drag(find.byType(CustomScrollView), const Offset(0, -20000));
+    await tester.pumpAndSettle();
+    expect(nextCount, 1);
+
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(nextCount, 1);
+  });
 }
 
 List<RenderSegment> _segmentsFor(List<String> parts) {

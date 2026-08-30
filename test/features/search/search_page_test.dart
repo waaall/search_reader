@@ -29,18 +29,19 @@ void main() {
     chapterTitle: '$label-chapter',
     snippet: label,
     charOffset: 0,
+    matchLength: label.length,
   );
 
   testWidgets('较晚完成的旧查询不覆盖新查询结果', (tester) async {
-    final completers = <String, Completer<List<SearchHit>>>{};
+    final completers = <String, Completer<SearchResultSet>>{};
     final cancellationChecks = <String, SearchCancellationCheck?>{};
 
-    Future<List<SearchHit>> search(
+    Future<SearchResultSet> search(
       String raw, {
       SearchCancellationCheck? isCancelled,
     }) {
       cancellationChecks[raw] = isCancelled;
-      return (completers[raw] = Completer<List<SearchHit>>()).future;
+      return (completers[raw] = Completer<SearchResultSet>()).future;
     }
 
     await tester.pumpWidget(buildSubject(search));
@@ -51,20 +52,24 @@ void main() {
 
     expect(cancellationChecks['old-query']?.call(), isTrue);
 
-    completers['new-query']!.complete([hit('new-result')]);
+    completers['new-query']!.complete(
+      SearchResultSet(hits: [hit('new-result')]),
+    );
     await tester.pumpAndSettle();
     expect(find.text('new-result-book · new-result-chapter'), findsOneWidget);
 
-    completers['old-query']!.complete([hit('old-result')]);
+    completers['old-query']!.complete(
+      SearchResultSet(hits: [hit('old-result')]),
+    );
     await tester.pumpAndSettle();
     expect(find.text('new-result-book · new-result-chapter'), findsOneWidget);
     expect(find.text('old-result-book · old-result-chapter'), findsNothing);
   });
 
   testWidgets('清空输入后忽略未完成的旧查询', (tester) async {
-    final completer = Completer<List<SearchHit>>();
+    final completer = Completer<SearchResultSet>();
 
-    Future<List<SearchHit>> search(
+    Future<SearchResultSet> search(
       String raw, {
       SearchCancellationCheck? isCancelled,
     }) => completer.future;
@@ -77,9 +82,48 @@ void main() {
 
     expect(find.byKey(const ValueKey('search-empty')), findsOneWidget);
 
-    completer.complete([hit('stale-result')]);
+    completer.complete(SearchResultSet(hits: [hit('stale-result')]));
     await tester.pumpAndSettle();
     expect(find.byKey(const ValueKey('search-empty')), findsOneWidget);
     expect(find.text('stale-result-book · stale-result-chapter'), findsNothing);
+  });
+
+  testWidgets('单字符查询显示明确提示且不调用搜索服务', (tester) async {
+    var calls = 0;
+    Future<SearchResultSet> search(
+      String raw, {
+      SearchCancellationCheck? isCancelled,
+    }) async {
+      calls++;
+      return SearchResultSet.empty;
+    }
+
+    await tester.pumpWidget(buildSubject(search));
+    await tester.enterText(find.byType(TextField), '好');
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const ValueKey('search-too-short')), findsOneWidget);
+    expect(calls, 0);
+  });
+
+  testWidgets('多本书结果显示数量并可按书筛选', (tester) async {
+    Future<SearchResultSet> search(
+      String raw, {
+      SearchCancellationCheck? isCancelled,
+    }) async => SearchResultSet(
+      hits: [hit('first'), hit('second'), hit('second')],
+      truncated: true,
+    );
+
+    await tester.pumpWidget(buildSubject(search));
+    await tester.enterText(find.byType(TextField), 'query');
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const ValueKey('search-book-filters')), findsOneWidget);
+    expect(find.text('3 results'), findsOneWidget);
+    await tester.tap(find.text('first-book (1)'));
+    await tester.pumpAndSettle();
+    expect(find.text('first-book · first-chapter'), findsOneWidget);
+    expect(find.text('second-book · second-chapter'), findsNothing);
   });
 }

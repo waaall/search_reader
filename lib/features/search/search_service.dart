@@ -5,80 +5,112 @@ import '../../core/storage/book_storage.dart';
 
 typedef SearchCancellationCheck = bool Function();
 
+const int kDefaultSearchResultLimit = 100;
+
+class SearchResultSet {
+  final List<SearchHit> hits;
+  final bool truncated;
+
+  const SearchResultSet({required this.hits, this.truncated = false});
+
+  static const empty = SearchResultSet(hits: []);
+}
+
 class SearchService {
-  SearchService({SearchDao? dao, BookStorage? storage})
-    : _dao = dao ?? SearchDao(),
-      _storage = storage ?? BookStorage.shared;
+  SearchService({
+    SearchDao? dao,
+    BookStorage? storage,
+    this.resultLimit = kDefaultSearchResultLimit,
+  }) : _dao = dao ?? SearchDao(),
+       _storage = storage ?? BookStorage.shared,
+       assert(resultLimit > 0);
 
   final SearchDao _dao;
   final BookStorage _storage;
-  Future<List<SearchHit>> _searchQueue = Future.value(const []);
+  final int resultLimit;
+  Future<SearchResultSet> _searchQueue = Future.value(SearchResultSet.empty);
 
-  // 把用户输入转成 FTS5 安全查询，从 DAO 拿全库命中行，
-  // 再按章节的字符/字节范围切沙盒文件得到原文，
-  // 在 Dart 侧生成 snippet 与跳转字符偏移
-  // - bigram 化保证 ≥2 字关键词命中（trigram 至少 3 字）
-  // - 文件 I/O 在此层：每次只读取一个命中章节，不缓存整本书
-  Future<List<SearchHit>> search(
+  // 把用户输入转成 FTS5 安全查询，从 DAO 拿全库命中章节，再流式扫描
+  // 章节原文生成每一个出现位置。队列确保旧请求释放文件后再开始新请求。
+  Future<SearchResultSet> search(
     String raw, {
     SearchCancellationCheck? isCancelled,
   }) async {
-    // Riverpod 页面会在输入变化时发起新请求；队列确保旧请求释放文件和字符串后再开始新请求。
     final next = _searchQueue.then(
       (_) => _searchNow(raw, isCancelled: isCancelled),
     );
-    _searchQueue = next.catchError((_) => const <SearchHit>[]);
+    _searchQueue = next.catchError((_) => SearchResultSet.empty);
     return next;
   }
 
-  Future<List<SearchHit>> _searchNow(
+  Future<SearchResultSet> _searchNow(
     String raw, {
     SearchCancellationCheck? isCancelled,
   }) async {
-    if (isCancelled?.call() ?? false) return const [];
+    if (isCancelled?.call() ?? false) return SearchResultSet.empty;
 
     final ftsQuery = toBigramQuery(raw);
-    if (ftsQuery.isEmpty) return const [];
-    final matches = await _dao.queryMatches(ftsQuery);
-    if (isCancelled?.call() ?? false) return const [];
-    if (matches.isEmpty) return const [];
+    if (ftsQuery.isEmpty) return SearchResultSet.empty;
+    // 多取一个候选章节，用来判断是否已经触及展示上限。
+    final matches = await _dao.queryMatches(ftsQuery, limit: resultLimit + 1);
+    if (isCancelled?.call() ?? false) return SearchResultSet.empty;
+    if (matches.isEmpty) return SearchResultSet.empty;
 
     final hits = <SearchHit>[];
-    for (final m in matches) {
-      // 当前命中完成后再检查取消，避免旧查询继续读取后续章节。
-      if (isCancelled?.call() ?? false) return const [];
-      final excerpt = await _readExcerpt(m, raw, isCancelled: isCancelled);
-      if (excerpt == null) return const [];
-      if (isCancelled?.call() ?? false) return const [];
-      hits.add(
-        SearchHit(
-          bookId: m.bookId,
-          bookTitle: m.bookTitle,
-          chapterId: m.chapterId,
-          chapterIndex: m.chapterIndex,
-          chapterTitle: m.chapterTitle,
-          snippet: excerpt.snippet,
-          charOffset: excerpt.charOffset,
-        ),
+    for (final match in matches) {
+      if (isCancelled?.call() ?? false) return SearchResultSet.empty;
+      final chapterResult = await _readExcerpts(
+        match,
+        raw,
+        maxHits: resultLimit + 1 - hits.length,
+        isCancelled: isCancelled,
       );
+      if (chapterResult == null) return SearchResultSet.empty;
+      for (final excerpt in chapterResult.excerpts) {
+        hits.add(
+          SearchHit(
+            bookId: match.bookId,
+            bookTitle: match.bookTitle,
+            chapterId: match.chapterId,
+            chapterIndex: match.chapterIndex,
+            chapterTitle: match.chapterTitle,
+            snippet: excerpt.snippet,
+            charOffset: excerpt.charOffset,
+            matchLength: excerpt.matchLength,
+          ),
+        );
+      }
+      if (hits.length > resultLimit || chapterResult.hasMore) {
+        return SearchResultSet(
+          hits: hits.take(resultLimit).toList(growable: false),
+          truncated: true,
+        );
+      }
     }
-    return hits;
+
+    // resultLimit + 1 个候选章节说明数据库侧也触及上限。正常的
+    // bigram 命中都会产生至少一个精确位置，因此应提示仍有候选未展示。
+    final candidateLimitReached = matches.length > resultLimit;
+    return SearchResultSet(
+      hits: hits.take(resultLimit).toList(growable: false),
+      truncated: candidateLimitReached || hits.length > resultLimit,
+    );
   }
 
-  // 所有书籍都按 UTF-8 小块扫描，找到命中后只保留上下文。
-  Future<_SearchExcerpt?> _readExcerpt(
+  // 按 UTF-8 小块扫描，滚动缓冲区只保留前文上下文、最长查询词和当前块。
+  // 这样可以返回同章多个命中，同时避免把长章节整段载入内存。
+  Future<_ChapterSearchResult?> _readExcerpts(
     ChapterMatchRow match,
     String rawQuery, {
+    required int maxHits,
     SearchCancellationCheck? isCancelled,
   }) async {
     const contextChars = 24;
-    final retainChars = _maxSearchTermLength(rawQuery) > contextChars
-        ? _maxSearchTermLength(rawQuery) + 1
-        : contextChars + 1;
+    final retainChars = contextChars + _maxSearchTermLength(rawQuery) + 1;
     var buffer = '';
     var bufferStartChar = 0;
-    var head = '';
-    TextMatch? found;
+    var searchFrom = 0;
+    final excerpts = <_SearchExcerpt>[];
 
     await for (final chunk in _storage.readUtf8RangeChunks(
       match.bookFilePath,
@@ -86,71 +118,89 @@ class SearchService {
       endByte: match.chapterEndByte,
     )) {
       if (isCancelled?.call() ?? false) return null;
-      if (head.length < retainChars) {
-        final nextHead = head + chunk;
-        final headEnd = _safePrefixEnd(
-          nextHead,
-          retainChars.clamp(0, nextHead.length),
-        );
-        head = nextHead.substring(0, headEnd);
-      }
-
       buffer += chunk;
-      found ??= findTextMatch(buffer, rawQuery);
-      if (found != null) {
-        final current = found;
-        if (buffer.length - current.offset >= current.length + contextChars) {
+      while (true) {
+        final found = findNextTextMatch(
+          buffer,
+          rawQuery,
+          startOffset: searchFrom,
+        );
+        if (found == null) {
+          final drop = _safePrefixEnd(
+            buffer,
+            (buffer.length - retainChars).clamp(0, buffer.length),
+          );
+          if (drop > 0) {
+            buffer = buffer.substring(drop);
+            bufferStartChar += drop;
+            searchFrom = (searchFrom - drop).clamp(0, buffer.length);
+          }
           break;
         }
+
+        // 等到当前块包含足够后文再生成摘要；文件结束时会统一处理尾部命中。
+        if (buffer.length - found.endOffset < contextChars) {
+          searchFrom = found.offset;
+          break;
+        }
+
+        excerpts.add(
+          _excerptForMatch(buffer, bufferStartChar, rawQuery, found),
+        );
+        if (excerpts.length >= maxHits) {
+          return _ChapterSearchResult(excerpts: excerpts, hasMore: true);
+        }
+        searchFrom = found.endOffset;
         final drop = _safePrefixEnd(
           buffer,
-          (current.offset - contextChars).clamp(0, buffer.length),
+          (searchFrom - contextChars).clamp(0, buffer.length),
         );
         if (drop > 0) {
           buffer = buffer.substring(drop);
           bufferStartChar += drop;
-          found = TextMatch(
-            offset: current.offset - drop,
-            length: current.length,
-          );
-        }
-      } else if (buffer.length > retainChars) {
-        final drop = _safePrefixEnd(buffer, buffer.length - retainChars);
-        if (drop > 0) {
-          buffer = buffer.substring(drop);
-          bufferStartChar += drop;
+          searchFrom -= drop;
         }
       }
     }
 
-    final current = found;
-    if (current == null) {
-      final fallback = head.isNotEmpty ? head : buffer;
-      return _SearchExcerpt(
-        snippet: makeSnippet(fallback, rawQuery),
-        charOffset: 0,
+    // 文件结束后不再等待后文，把缓冲区中剩余命中全部发布。
+    while (true) {
+      if (isCancelled?.call() ?? false) return null;
+      final found = findNextTextMatch(
+        buffer,
+        rawQuery,
+        startOffset: searchFrom,
       );
+      if (found == null) break;
+      excerpts.add(_excerptForMatch(buffer, bufferStartChar, rawQuery, found));
+      if (excerpts.length >= maxHits) {
+        final hasAnother =
+            findNextTextMatch(buffer, rawQuery, startOffset: found.endOffset) !=
+            null;
+        return _ChapterSearchResult(excerpts: excerpts, hasMore: hasAnother);
+      }
+      searchFrom = found.endOffset;
     }
 
-    final start = _safePrefixEnd(
-      buffer,
-      (current.offset - contextChars).clamp(0, buffer.length),
-    );
-    final rawEnd = (current.offset + current.length + contextChars).clamp(
-      start,
-      buffer.length,
-    );
-    final end = _safeSuffixEnd(buffer, rawEnd);
-    final content = buffer.substring(start, end);
+    return _ChapterSearchResult(excerpts: excerpts);
+  }
+
+  _SearchExcerpt _excerptForMatch(
+    String buffer,
+    int bufferStartChar,
+    String rawQuery,
+    TextMatch match,
+  ) {
     return _SearchExcerpt(
-      snippet: makeSnippet(content, rawQuery, contextChars: contextChars),
-      charOffset: bufferStartChar + current.offset,
+      snippet: makeSnippetForMatch(buffer, rawQuery, match),
+      charOffset: bufferStartChar + match.offset,
+      matchLength: match.length,
     );
   }
 
   int _maxSearchTermLength(String rawQuery) {
     var result = 2;
-    for (final term in rawQuery.split(RegExp(r'\s+'))) {
+    for (final term in searchTerms(rawQuery)) {
       if (term.length > result) result = term.length;
     }
     return result;
@@ -166,16 +216,6 @@ class SearchService {
     return end;
   }
 
-  int _safeSuffixEnd(String text, int end) {
-    if (end > 0 &&
-        end < text.length &&
-        _isHighSurrogate(text.codeUnitAt(end - 1)) &&
-        _isLowSurrogate(text.codeUnitAt(end))) {
-      return end + 1;
-    }
-    return end;
-  }
-
   bool _isHighSurrogate(int codeUnit) =>
       codeUnit >= 0xD800 && codeUnit <= 0xDBFF;
 
@@ -186,6 +226,18 @@ class SearchService {
 class _SearchExcerpt {
   final String snippet;
   final int charOffset;
+  final int matchLength;
 
-  const _SearchExcerpt({required this.snippet, required this.charOffset});
+  const _SearchExcerpt({
+    required this.snippet,
+    required this.charOffset,
+    required this.matchLength,
+  });
+}
+
+class _ChapterSearchResult {
+  final List<_SearchExcerpt> excerpts;
+  final bool hasMore;
+
+  const _ChapterSearchResult({required this.excerpts, this.hasMore = false});
 }

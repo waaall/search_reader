@@ -122,6 +122,12 @@ abstract class AppLocalizations {
   /// **'Save'**
   String get commonSave;
 
+  /// No description provided for @commonClear.
+  ///
+  /// In en, this message translates to:
+  /// **'Clear'**
+  String get commonClear;
+
   /// No description provided for @commonRetry.
   ///
   /// In en, this message translates to:
@@ -524,6 +530,36 @@ abstract class AppLocalizations {
   /// **'Enter keywords to search chapters across your library.'**
   String get searchEmptyHint;
 
+  /// No description provided for @searchMinimumLength.
+  ///
+  /// In en, this message translates to:
+  /// **'Enter at least 2 characters. Single-character searches are not supported by the current index.'**
+  String get searchMinimumLength;
+
+  /// No description provided for @searchResultCount.
+  ///
+  /// In en, this message translates to:
+  /// **'{count} results'**
+  String searchResultCount(int count);
+
+  /// No description provided for @searchFilteredResultCount.
+  ///
+  /// In en, this message translates to:
+  /// **'{visible} in this book · {total} loaded'**
+  String searchFilteredResultCount(int visible, int total);
+
+  /// No description provided for @searchResultLimitReached.
+  ///
+  /// In en, this message translates to:
+  /// **'Showing the first {limit}'**
+  String searchResultLimitReached(int limit);
+
+  /// No description provided for @searchAllBooks.
+  ///
+  /// In en, this message translates to:
+  /// **'All ({count})'**
+  String searchAllBooks(int count);
+
   /// No description provided for @noSearchResults.
   ///
   /// In en, this message translates to:
@@ -584,6 +620,36 @@ abstract class AppLocalizations {
   /// **'Contents'**
   String get contentsTitle;
 
+  /// No description provided for @currentChapterPosition.
+  ///
+  /// In en, this message translates to:
+  /// **'Chapter {current} of {total}'**
+  String currentChapterPosition(int current, int total);
+
+  /// No description provided for @chapterSearchHint.
+  ///
+  /// In en, this message translates to:
+  /// **'Search chapter titles'**
+  String get chapterSearchHint;
+
+  /// No description provided for @chapterSearchResultCount.
+  ///
+  /// In en, this message translates to:
+  /// **'{count} matches'**
+  String chapterSearchResultCount(int count);
+
+  /// No description provided for @noChapterSearchResults.
+  ///
+  /// In en, this message translates to:
+  /// **'No matching chapters'**
+  String get noChapterSearchResults;
+
+  /// No description provided for @chapterCount.
+  ///
+  /// In en, this message translates to:
+  /// **'{count} chapters'**
+  String chapterCount(int count);
+
   /// No description provided for @contentsAndBookmarks.
   ///
   /// In en, this message translates to:
@@ -619,6 +685,42 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Next'**
   String get nextChapter;
+
+  /// No description provided for @searchMatchPosition.
+  ///
+  /// In en, this message translates to:
+  /// **'{current}/{total}'**
+  String searchMatchPosition(int current, int total);
+
+  /// No description provided for @previousSearchMatch.
+  ///
+  /// In en, this message translates to:
+  /// **'Previous search result'**
+  String get previousSearchMatch;
+
+  /// No description provided for @nextSearchMatch.
+  ///
+  /// In en, this message translates to:
+  /// **'Next search result'**
+  String get nextSearchMatch;
+
+  /// No description provided for @closeSearchNavigation.
+  ///
+  /// In en, this message translates to:
+  /// **'Close search navigation'**
+  String get closeSearchNavigation;
+
+  /// No description provided for @continueToNextChapter.
+  ///
+  /// In en, this message translates to:
+  /// **'Keep scrolling for the next chapter'**
+  String get continueToNextChapter;
+
+  /// No description provided for @endOfBook.
+  ///
+  /// In en, this message translates to:
+  /// **'End of book'**
+  String get endOfBook;
 
   /// No description provided for @justNow.
   ///

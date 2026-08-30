@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../core/db/text_index.dart';
 import '../../core/parser/render_segmenter.dart';
 import '../../domain/reader_settings.dart';
 import '../../domain/render_segment.dart';
@@ -13,6 +14,7 @@ import '../settings/settings_provider.dart';
 import 'bookmark_provider.dart';
 import 'lazy_chapter_paginator.dart';
 import 'reader_provider.dart';
+import 'reader_search_context.dart';
 import 'segment_text_source.dart';
 import 'widgets/reader_drawer.dart';
 import 'widgets/reader_settings_sheet.dart';
@@ -22,12 +24,14 @@ class ReaderPage extends ConsumerWidget {
   // 可选：从搜索跳转时直接定位到指定章节与字符
   final int? initialChapterIndex;
   final int? initialCharOffset;
+  final ReaderSearchContext? searchContext;
 
   const ReaderPage({
     super.key,
     required this.bookId,
     this.initialChapterIndex,
     this.initialCharOffset,
+    this.searchContext,
   });
 
   @override
@@ -54,6 +58,7 @@ class ReaderPage extends ConsumerWidget {
           state: state,
           initialChapterIndex: initialChapterIndex,
           initialCharOffset: initialCharOffset,
+          searchContext: searchContext,
         ),
       ),
     );
@@ -66,6 +71,7 @@ class _ReaderShell extends ConsumerStatefulWidget {
   final ReaderSettings settings;
   final int? initialChapterIndex;
   final int? initialCharOffset;
+  final ReaderSearchContext? searchContext;
 
   const _ReaderShell({
     required this.bookId,
@@ -73,6 +79,7 @@ class _ReaderShell extends ConsumerStatefulWidget {
     required this.settings,
     this.initialChapterIndex,
     this.initialCharOffset,
+    this.searchContext,
   });
 
   @override
@@ -84,6 +91,8 @@ class _ReaderShellState extends ConsumerState<_ReaderShell> {
   bool _didJumpToInitialChapter = false;
   bool _savingAndPopping = false;
   bool _allowPopAfterSave = false;
+  late int _activeSearchTargetIndex;
+  late bool _searchNavigationVisible;
 
   // 章节内最近上报的阅读偏移：翻页/滚动时更新（非响应式，不触发重建）。
   // 切换阅读模式、改字号等导致视图重建时用它保留当前位置；发生跳转后置空。
@@ -95,14 +104,21 @@ class _ReaderShellState extends ConsumerState<_ReaderShell> {
   @override
   void initState() {
     super.initState();
-    // 如果是从搜索跳转，进入后跳转到指定章节
-    final ic = widget.initialChapterIndex;
+    final searchContext = widget.searchContext;
+    _searchNavigationVisible = searchContext != null;
+    _activeSearchTargetIndex = searchContext?.initialTargetIndex ?? 0;
+    // 搜索上下文优先于旧的单点参数；书签等现有入口仍继续使用单点参数。
+    final searchTarget = searchContext == null
+        ? null
+        : searchContext.targets[_activeSearchTargetIndex];
+    final ic = searchTarget?.chapterIndex ?? widget.initialChapterIndex;
+    final offset = searchTarget?.charOffset ?? widget.initialCharOffset ?? 0;
     if (ic != null && !_didJumpToInitialChapter) {
       _didJumpToInitialChapter = true;
       WidgetsBinding.instance.addPostFrameCallback((_) {
         ref
             .read(readerProvider(widget.bookId).notifier)
-            .jumpToChapter(ic, charOffset: widget.initialCharOffset ?? 0);
+            .jumpToChapter(ic, charOffset: offset);
       });
     }
   }
@@ -136,6 +152,12 @@ class _ReaderShellState extends ConsumerState<_ReaderShell> {
       fontSize: settings.fontSize.size,
       height: settings.lineHeight.multiplier,
     );
+    final searchContext = _searchNavigationVisible
+        ? widget.searchContext
+        : null;
+    final activeSearchTarget = searchContext == null
+        ? null
+        : searchContext.targets[_activeSearchTargetIndex];
 
     // 当前章节内的所有书签 offset 集合：传给 _PaginatedView 判断"当前页是否有书签"
     final asyncBookmarks = ref.watch(bookmarksProvider(widget.bookId));
@@ -196,9 +218,10 @@ class _ReaderShellState extends ConsumerState<_ReaderShell> {
                   .read(readerProvider(widget.bookId).notifier)
                   .readSegmentText(segmentIndex);
 
+              late final Widget readerView;
               // 滚动模式：无需分页计算
               if (settings.readingMode == ReadingMode.scroll) {
-                return SegmentedScrollReaderView(
+                readerView = SegmentedScrollReaderView(
                   key: ValueKey(
                     's-${state.book.id}-${state.currentChapterIndex}-${state.jumpToken}-${settings.fontSize.name}-${settings.lineHeight.name}',
                   ),
@@ -223,46 +246,115 @@ class _ReaderShellState extends ConsumerState<_ReaderShell> {
                   onAddBookmark: (charOffset) =>
                       _addBookmark(state.currentChapterIndex, charOffset),
                   onBack: goBack,
+                  searchQuery: searchContext?.query,
+                  activeSearchOffset:
+                      activeSearchTarget?.chapterIndex ==
+                          state.currentChapterIndex
+                      ? activeSearchTarget?.charOffset
+                      : null,
+                  activeSearchLength:
+                      activeSearchTarget?.chapterIndex ==
+                          state.currentChapterIndex
+                      ? activeSearchTarget?.matchLength
+                      : null,
+                );
+              } else {
+                // 翻页模式：按页探测有限文本窗口，不再同步分页整个章节。
+                final contentWidth = constraints.maxWidth - _padding.horizontal;
+                final contentHeight = constraints.maxHeight - _padding.vertical;
+                readerView = SegmentedPaginatedReaderView(
+                  key: ValueKey(
+                    'p-${state.book.id}-${state.currentChapterIndex}-${state.jumpToken}-${settings.fontSize.name}-${settings.lineHeight.name}-${constraints.maxWidth.toInt()}x${constraints.maxHeight.toInt()}',
+                  ),
+                  segments: state.currentChapterSegments,
+                  chapterStartChar: state.currentChapter.startChar,
+                  initialSegmentIndex: effectiveSegmentIndex,
+                  initialSegmentText: effectiveSegmentText,
+                  initialCharOffset: effectiveOffset,
+                  loadSegment: loadSegment,
+                  contentWidth: contentWidth,
+                  contentHeight: contentHeight,
+                  padding: _padding,
+                  textStyle: textStyle,
+                  themeBg: settings.theme.background,
+                  themeFg: settings.theme.foreground,
+                  chapterTitle: state.currentChapter.title,
+                  menuVisible: _menuVisible,
+                  chapterBookmarkOffsets: chapterBookmarkOffsets,
+                  onCharOffsetChanged: reportOffset,
+                  onTapCenter: tapCenter,
+                  onPrevChapter: onPrevChapter,
+                  onNextChapter: onNextChapter,
+                  onOpenChapters: openChapters,
+                  onOpenSettings: openSettings,
+                  onAddBookmark: (charOffset) =>
+                      _addBookmark(state.currentChapterIndex, charOffset),
+                  onBack: goBack,
+                  searchQuery: searchContext?.query,
+                  activeSearchOffset:
+                      activeSearchTarget?.chapterIndex ==
+                          state.currentChapterIndex
+                      ? activeSearchTarget?.charOffset
+                      : null,
+                  activeSearchLength:
+                      activeSearchTarget?.chapterIndex ==
+                          state.currentChapterIndex
+                      ? activeSearchTarget?.matchLength
+                      : null,
                 );
               }
 
-              // 翻页模式：按页探测有限文本窗口，不再同步分页整个章节。
-              final contentWidth = constraints.maxWidth - _padding.horizontal;
-              final contentHeight = constraints.maxHeight - _padding.vertical;
-              return SegmentedPaginatedReaderView(
-                key: ValueKey(
-                  'p-${state.book.id}-${state.currentChapterIndex}-${state.jumpToken}-${settings.fontSize.name}-${settings.lineHeight.name}-${constraints.maxWidth.toInt()}x${constraints.maxHeight.toInt()}',
-                ),
-                segments: state.currentChapterSegments,
-                chapterStartChar: state.currentChapter.startChar,
-                initialSegmentIndex: effectiveSegmentIndex,
-                initialSegmentText: effectiveSegmentText,
-                initialCharOffset: effectiveOffset,
-                loadSegment: loadSegment,
-                contentWidth: contentWidth,
-                contentHeight: contentHeight,
-                padding: _padding,
-                textStyle: textStyle,
-                themeBg: settings.theme.background,
-                themeFg: settings.theme.foreground,
-                chapterTitle: state.currentChapter.title,
-                menuVisible: _menuVisible,
-                chapterBookmarkOffsets: chapterBookmarkOffsets,
-                onCharOffsetChanged: reportOffset,
-                onTapCenter: tapCenter,
-                onPrevChapter: onPrevChapter,
-                onNextChapter: onNextChapter,
-                onOpenChapters: openChapters,
-                onOpenSettings: openSettings,
-                onAddBookmark: (charOffset) =>
-                    _addBookmark(state.currentChapterIndex, charOffset),
-                onBack: goBack,
+              return Stack(
+                children: [
+                  Positioned.fill(child: readerView),
+                  if (searchContext != null && !_menuVisible)
+                    Positioned(
+                      top: AppSpacing.xs,
+                      left: AppSpacing.md,
+                      right: AppSpacing.md,
+                      child: _ReaderSearchNavigationBar(
+                        query: searchContext.query,
+                        current: _activeSearchTargetIndex + 1,
+                        total: searchContext.targets.length,
+                        background: settings.theme.background,
+                        foreground: settings.theme.foreground,
+                        onPrevious: _activeSearchTargetIndex > 0
+                            ? () => _jumpToSearchTarget(-1)
+                            : null,
+                        onNext:
+                            _activeSearchTargetIndex + 1 <
+                                searchContext.targets.length
+                            ? () => _jumpToSearchTarget(1)
+                            : null,
+                        onClose: () =>
+                            setState(() => _searchNavigationVisible = false),
+                      ),
+                    ),
+                ],
               );
             },
           ),
         ),
       ),
     );
+  }
+
+  Future<void> _jumpToSearchTarget(int delta) async {
+    final searchContext = widget.searchContext;
+    if (!_searchNavigationVisible || searchContext == null) return;
+    final next = (_activeSearchTargetIndex + delta).clamp(
+      0,
+      searchContext.targets.length - 1,
+    );
+    if (next == _activeSearchTargetIndex) return;
+    final target = searchContext.targets[next];
+    setState(() {
+      _activeSearchTargetIndex = next;
+      _menuVisible = false;
+    });
+    await ref
+        .read(readerProvider(widget.bookId).notifier)
+        .jumpToChapter(target.chapterIndex, charOffset: target.charOffset);
   }
 
   // 退出阅读页前保存"当前可见位置"。
@@ -354,6 +446,223 @@ class _BookmarkNoteDialogState extends State<_BookmarkNoteDialog> {
   }
 }
 
+class _ReaderSearchNavigationBar extends StatelessWidget {
+  final String query;
+  final int current;
+  final int total;
+  final Color background;
+  final Color foreground;
+  final VoidCallback? onPrevious;
+  final VoidCallback? onNext;
+  final VoidCallback onClose;
+
+  const _ReaderSearchNavigationBar({
+    required this.query,
+    required this.current,
+    required this.total,
+    required this.background,
+    required this.foreground,
+    required this.onPrevious,
+    required this.onNext,
+    required this.onClose,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final panel = Color.alphaBlend(
+      foreground.withValues(alpha: 0.09),
+      background,
+    );
+    return Center(
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 560),
+        child: Material(
+          color: panel.withValues(alpha: 0.98),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(AppRadius.md),
+            side: BorderSide(color: foreground.withValues(alpha: 0.14)),
+          ),
+          child: SizedBox(
+            height: 44,
+            child: Row(
+              children: [
+                const SizedBox(width: AppSpacing.sm),
+                Icon(Icons.search, size: 18, color: foreground),
+                const SizedBox(width: AppSpacing.sm),
+                Expanded(
+                  child: Text(
+                    query,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      color: foreground,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+                Text(
+                  context.l10n.searchMatchPosition(current, total),
+                  style: TextStyle(
+                    color: foreground.withValues(alpha: 0.68),
+                    fontSize: 12,
+                  ),
+                ),
+                IconButton(
+                  tooltip: context.l10n.previousSearchMatch,
+                  visualDensity: VisualDensity.compact,
+                  color: foreground,
+                  disabledColor: foreground.withValues(alpha: 0.25),
+                  onPressed: onPrevious,
+                  icon: const Icon(Icons.keyboard_arrow_up, size: 20),
+                ),
+                IconButton(
+                  tooltip: context.l10n.nextSearchMatch,
+                  visualDensity: VisualDensity.compact,
+                  color: foreground,
+                  disabledColor: foreground.withValues(alpha: 0.25),
+                  onPressed: onNext,
+                  icon: const Icon(Icons.keyboard_arrow_down, size: 20),
+                ),
+                IconButton(
+                  tooltip: context.l10n.closeSearchNavigation,
+                  visualDensity: VisualDensity.compact,
+                  color: foreground,
+                  onPressed: onClose,
+                  icon: const Icon(Icons.close, size: 19),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _ReaderText extends StatelessWidget {
+  static const _maxPassiveHighlights = 256;
+
+  final String text;
+  final int chapterOffset;
+  final TextStyle style;
+  final Color background;
+  final Color foreground;
+  final String? searchQuery;
+  final int? activeSearchOffset;
+  final int? activeSearchLength;
+
+  const _ReaderText({
+    required this.text,
+    required this.chapterOffset,
+    required this.style,
+    required this.background,
+    required this.foreground,
+    this.searchQuery,
+    this.activeSearchOffset,
+    this.activeSearchLength,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final query = searchQuery;
+    if (query == null || query.isEmpty || text.isEmpty) {
+      return Text(text, style: style);
+    }
+
+    final passiveMatches = findTextMatches(
+      text,
+      query,
+      maxMatches: _maxPassiveHighlights,
+    );
+    final activeStart = activeSearchOffset == null
+        ? null
+        : activeSearchOffset! - chapterOffset;
+    final activeEnd = activeStart == null
+        ? null
+        : activeStart + (activeSearchLength ?? 0);
+    final boundaries = <int>{0, text.length};
+    for (final match in passiveMatches) {
+      boundaries
+        ..add(match.offset)
+        ..add(match.endOffset);
+    }
+    if (activeStart != null && activeEnd != null) {
+      final start = activeStart.clamp(0, text.length);
+      final end = activeEnd.clamp(0, text.length);
+      if (end > start) {
+        boundaries
+          ..add(start)
+          ..add(end);
+      }
+    }
+
+    final points = boundaries.toList()..sort();
+    final passiveBackground = Color.alphaBlend(
+      foreground.withValues(alpha: 0.14),
+      background,
+    );
+    final activeBackground = Color.alphaBlend(
+      const Color(0xFFF4B400).withValues(alpha: 0.52),
+      background,
+    );
+    final spans = <TextSpan>[];
+    for (var index = 0; index + 1 < points.length; index++) {
+      final start = points[index];
+      final end = points[index + 1];
+      if (end <= start) continue;
+      final active =
+          activeStart != null &&
+          activeEnd != null &&
+          start < activeEnd &&
+          end > activeStart;
+      final passive = passiveMatches.any(
+        (match) => start < match.endOffset && end > match.offset,
+      );
+      spans.add(
+        TextSpan(
+          text: text.substring(start, end),
+          style: active
+              ? TextStyle(
+                  backgroundColor: activeBackground,
+                  fontWeight: FontWeight.w700,
+                )
+              : passive
+              ? TextStyle(backgroundColor: passiveBackground)
+              : null,
+        ),
+      );
+    }
+    return Text.rich(TextSpan(children: spans), style: style);
+  }
+}
+
+class _ChapterEndCue extends StatelessWidget {
+  final bool hasNext;
+  final Color foreground;
+
+  const _ChapterEndCue({required this.hasNext, required this.foreground});
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(
+        AppSpacing.lg,
+        AppSpacing.md,
+        AppSpacing.lg,
+        AppSpacing.xl,
+      ),
+      child: Text(
+        hasNext ? context.l10n.continueToNextChapter : context.l10n.endOfBook,
+        textAlign: TextAlign.center,
+        style: TextStyle(
+          color: foreground.withValues(alpha: 0.52),
+          fontSize: 12,
+        ),
+      ),
+    );
+  }
+}
+
 class SegmentedPaginatedReaderView extends StatefulWidget {
   final List<RenderSegment> segments;
   final int chapterStartChar;
@@ -380,6 +689,9 @@ class SegmentedPaginatedReaderView extends StatefulWidget {
   // 加书签：传入当前页起始的章节内偏移
   final void Function(int charOffset) onAddBookmark;
   final Future<void> Function(int charOffset) onBack;
+  final String? searchQuery;
+  final int? activeSearchOffset;
+  final int? activeSearchLength;
 
   const SegmentedPaginatedReaderView({
     super.key,
@@ -406,6 +718,9 @@ class SegmentedPaginatedReaderView extends StatefulWidget {
     required this.onOpenSettings,
     required this.onAddBookmark,
     required this.onBack,
+    this.searchQuery,
+    this.activeSearchOffset,
+    this.activeSearchLength,
   });
 
   @override
@@ -566,7 +881,16 @@ class _PaginatedViewState extends State<SegmentedPaginatedReaderView> {
                 : Padding(
                     key: ValueKey(current.startOffset),
                     padding: widget.padding,
-                    child: Text(current.text, style: widget.textStyle),
+                    child: _ReaderText(
+                      text: current.text,
+                      chapterOffset: current.startOffset,
+                      style: widget.textStyle,
+                      background: widget.themeBg,
+                      foreground: widget.themeFg,
+                      searchQuery: widget.searchQuery,
+                      activeSearchOffset: widget.activeSearchOffset,
+                      activeSearchLength: widget.activeSearchLength,
+                    ),
                   ),
           ),
         ),
@@ -984,11 +1308,14 @@ class SegmentedScrollReaderView extends StatefulWidget {
   final void Function(int) onCharOffsetChanged;
   final VoidCallback onTapCenter;
   final VoidCallback? onPrevChapter;
-  final VoidCallback? onNextChapter;
+  final Future<void> Function()? onNextChapter;
   final VoidCallback onOpenChapters;
   final VoidCallback onOpenSettings;
   final void Function(int charOffset) onAddBookmark;
   final Future<void> Function(int charOffset) onBack;
+  final String? searchQuery;
+  final int? activeSearchOffset;
+  final int? activeSearchLength;
 
   const SegmentedScrollReaderView({
     super.key,
@@ -1013,6 +1340,9 @@ class SegmentedScrollReaderView extends StatefulWidget {
     required this.onOpenSettings,
     required this.onAddBookmark,
     required this.onBack,
+    this.searchQuery,
+    this.activeSearchOffset,
+    this.activeSearchLength,
   });
 
   @override
@@ -1032,6 +1362,8 @@ class _ScrollViewState extends State<SegmentedScrollReaderView> {
   final GlobalKey _viewportKey = GlobalKey();
   final Map<int, GlobalKey> _segmentKeys = {};
   bool _didPositionInitially = false;
+  bool _userScrollingForward = false;
+  bool _changingChapter = false;
   Timer? _progressReportTimer;
   late int _latestCharOffset = widget.initialCharOffset;
   // 阅读进度百分比：用 ValueNotifier 单独驱动底部百分比刷新，
@@ -1069,6 +1401,46 @@ class _ScrollViewState extends State<SegmentedScrollReaderView> {
     _progressReportTimer = Timer(const Duration(milliseconds: 250), () {
       if (mounted) widget.onCharOffsetChanged(_latestCharOffset);
     });
+  }
+
+  bool _handleScrollNotification(ScrollNotification notification) {
+    if (notification is UserScrollNotification) {
+      if (notification.direction == ScrollDirection.reverse) {
+        _userScrollingForward = true;
+      } else if (notification.direction == ScrollDirection.forward) {
+        _userScrollingForward = false;
+      }
+    }
+    if (notification is ScrollEndNotification) {
+      _latestCharOffset = _currentCharOffset;
+      widget.onCharOffsetChanged(_latestCharOffset);
+      if (_userScrollingForward &&
+          notification.metrics.extentAfter <= 1 &&
+          widget.onNextChapter != null) {
+        _userScrollingForward = false;
+        unawaited(_advanceToNextChapter());
+      }
+    }
+    return false;
+  }
+
+  Future<void> _advanceToNextChapter() async {
+    final next = widget.onNextChapter;
+    if (_changingChapter || next == null) return;
+    _changingChapter = true;
+    _latestCharOffset = _source.chapterCharCount;
+    widget.onCharOffsetChanged(_latestCharOffset);
+    try {
+      await next();
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(context.l10n.openBookFailed(error))),
+        );
+      }
+    } finally {
+      _changingChapter = false;
+    }
   }
 
   Future<void> _positionInitially() async {
@@ -1174,7 +1546,20 @@ class _ScrollViewState extends State<SegmentedScrollReaderView> {
               (_) => _positionInitially(),
             );
           }
-          return Text(text, key: key, style: widget.textStyle);
+          final segment = widget.segments[index];
+          return KeyedSubtree(
+            key: key,
+            child: _ReaderText(
+              text: text,
+              chapterOffset: segment.startChar - widget.chapterStartChar,
+              style: widget.textStyle,
+              background: widget.themeBg,
+              foreground: widget.themeFg,
+              searchQuery: widget.searchQuery,
+              activeSearchOffset: widget.activeSearchOffset,
+              activeSearchLength: widget.activeSearchLength,
+            ),
+          );
         },
       ),
     );
@@ -1203,12 +1588,8 @@ class _ScrollViewState extends State<SegmentedScrollReaderView> {
         Positioned.fill(
           child: SizedBox(
             key: _viewportKey,
-            child: NotificationListener<ScrollEndNotification>(
-              onNotification: (_) {
-                _latestCharOffset = _currentCharOffset;
-                widget.onCharOffsetChanged(_latestCharOffset);
-                return false;
-              },
+            child: NotificationListener<ScrollNotification>(
+              onNotification: _handleScrollNotification,
               child: GestureDetector(
                 behavior: HitTestBehavior.translucent,
                 onTap: widget.onTapCenter,
@@ -1234,6 +1615,12 @@ class _ScrollViewState extends State<SegmentedScrollReaderView> {
                         ),
                         childCount:
                             widget.segments.length - widget.initialSegmentIndex,
+                      ),
+                    ),
+                    SliverToBoxAdapter(
+                      child: _ChapterEndCue(
+                        hasNext: widget.onNextChapter != null,
+                        foreground: widget.themeFg,
                       ),
                     ),
                   ],

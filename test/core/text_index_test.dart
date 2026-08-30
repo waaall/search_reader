@@ -71,6 +71,40 @@ void main() {
       final s = makeSnippet(content, '李 李寻欢');
       expect(s.contains('<mark>李寻欢</mark>'), true);
     });
+
+    test('英文高亮不区分大小写并保留原文', () {
+      final s = makeSnippet('Alice walked home.', 'alice');
+      expect(s, contains('<mark>Alice</mark>'));
+    });
+  });
+
+  group('search query validation', () {
+    test('普通单字符查询不发起不可靠搜索', () {
+      expect(isSupportedSearchQuery('好'), isFalse);
+      expect(isSupportedSearchQuery('a'), isFalse);
+      expect(isSupportedSearchQuery('你好'), isTrue);
+    });
+
+    test('特殊字符清洗与 FTS 查询保持一致', () {
+      expect(searchTerms('你好-world'), ['你好', 'world']);
+      expect(isSupportedSearchQuery('你好-world'), isTrue);
+    });
+  });
+
+  group('findTextMatches', () {
+    test('返回同一片段内多个不区分大小写的命中', () {
+      const content = 'Alice and ALICE';
+      final matches = findTextMatches(content, 'alice');
+      expect(matches.map((match) => match.offset), [0, 10]);
+      expect(matches.every((match) => match.length == 5), isTrue);
+    });
+
+    test('同位置多个查询词优先保留最长词', () {
+      const content = '李寻欢来了';
+      final match = findNextTextMatch(content, '李寻 李寻欢');
+      expect(match?.offset, 0);
+      expect(match?.length, 3);
+    });
   });
 
   group('findMatchOffset', () {
@@ -83,6 +117,11 @@ void main() {
       const content = '城门外，李寻欢的飞刀已经出鞘。';
       // "李" 与 "李寻欢" 都在原文中，应取最长的 "李寻欢" 的位置
       expect(findMatchOffset(content, '李 李寻欢'), content.indexOf('李寻欢'));
+    });
+
+    test('英文定位不区分大小写', () {
+      const content = 'Before Alice after';
+      expect(findMatchOffset(content, 'alice'), content.indexOf('Alice'));
     });
 
     test('整词不连续出现时退化用第一个 bigram 定位', () {

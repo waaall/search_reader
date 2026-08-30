@@ -1,4 +1,4 @@
-// 搜索页：管理输入防抖、请求竞态保护与结果展示。
+// 搜索页：管理输入防抖、请求竞态保护、按书筛选与结果展示。
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -6,16 +6,18 @@ import 'package:flutter_animate/flutter_animate.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/db/daos.dart';
+import '../../core/db/text_index.dart';
 import '../../shared/l10n/app_l10n.dart';
 import '../../shared/navigation/app_routes.dart';
 import '../../shared/theme/app_tokens.dart';
 import '../../shared/widgets/app_animated_switcher.dart';
 import '../reader/reader_page.dart';
+import '../reader/reader_search_context.dart';
 import '../recovery/application_data_recovery_notice.dart';
 import 'search_service.dart';
 
 typedef SearchRunner =
-    Future<List<SearchHit>> Function(
+    Future<SearchResultSet> Function(
       String raw, {
       SearchCancellationCheck? isCancelled,
     });
@@ -39,8 +41,11 @@ class _SearchPageState extends ConsumerState<SearchPage> {
   late final SearchRunner _search;
   Timer? _debounce;
   int _searchGeneration = 0;
-  List<SearchHit> _hits = const [];
+  SearchResultSet _result = SearchResultSet.empty;
+  String _resultQuery = '';
+  int? _selectedBookId;
   bool _loading = false;
+  bool _queryTooShort = false;
   String? _error;
 
   @override
@@ -61,11 +66,16 @@ class _SearchPageState extends ConsumerState<SearchPage> {
   void _onChanged(String text) {
     final generation = ++_searchGeneration;
     _debounce?.cancel();
+    final empty = text.trim().isEmpty;
+    final supported = !empty && isSupportedSearchQuery(text);
 
-    if (text.trim().isEmpty) {
+    if (empty || !supported) {
       setState(() {
-        _hits = const [];
+        _result = SearchResultSet.empty;
+        _resultQuery = '';
+        _selectedBookId = null;
         _loading = false;
+        _queryTooShort = !empty;
         _error = null;
       });
       return;
@@ -73,10 +83,10 @@ class _SearchPageState extends ConsumerState<SearchPage> {
 
     setState(() {
       _loading = true;
+      _queryTooShort = false;
       _error = null;
     });
 
-    // 非空查询使用防抖，避免每个字符都查一次数据库。
     _debounce = Timer(
       widget.debounceDuration,
       () => _runSearch(text, generation),
@@ -89,20 +99,23 @@ class _SearchPageState extends ConsumerState<SearchPage> {
     if (!_isCurrent(generation)) return;
 
     try {
-      final hits = await _search(
+      final result = await _search(
         text,
         isCancelled: () => !_isCurrent(generation),
       );
-      // 只有最新世代能写入 UI，避免旧结果或旧错误覆盖新查询。
       if (!_isCurrent(generation)) return;
       setState(() {
-        _hits = hits;
+        _result = result;
+        _resultQuery = text;
+        _selectedBookId = null;
         _loading = false;
       });
     } catch (e) {
       if (!_isCurrent(generation)) return;
       setState(() {
-        _hits = const [];
+        _result = SearchResultSet.empty;
+        _resultQuery = '';
+        _selectedBookId = null;
         _loading = false;
         _error = '$e';
       });
@@ -119,7 +132,18 @@ class _SearchPageState extends ConsumerState<SearchPage> {
           decoration: InputDecoration(
             hintText: context.l10n.searchHint,
             border: InputBorder.none,
+            suffixIcon: _controller.text.isEmpty
+                ? null
+                : IconButton(
+                    tooltip: context.l10n.commonClear,
+                    icon: const Icon(Icons.clear),
+                    onPressed: () {
+                      _controller.clear();
+                      _onChanged('');
+                    },
+                  ),
           ),
+          textInputAction: TextInputAction.search,
           onChanged: _onChanged,
         ),
       ),
@@ -145,36 +169,216 @@ class _SearchPageState extends ConsumerState<SearchPage> {
         child: Text(context.l10n.searchFailed(_error!)),
       );
     }
-    if (_controller.text.isEmpty) {
+    if (_controller.text.trim().isEmpty) {
       return Center(
         key: const ValueKey('search-empty'),
         child: Text(
           context.l10n.searchEmptyHint,
-          style: TextStyle(color: Colors.grey),
+          style: const TextStyle(color: Colors.grey),
         ),
       );
     }
-    if (_hits.isEmpty) {
+    if (_queryTooShort) {
+      return Center(
+        key: const ValueKey('search-too-short'),
+        child: Padding(
+          padding: const EdgeInsets.all(AppSpacing.lg),
+          child: Text(
+            context.l10n.searchMinimumLength,
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              color: Theme.of(context).colorScheme.onSurfaceVariant,
+            ),
+          ),
+        ),
+      );
+    }
+    if (_result.hits.isEmpty) {
       return Center(
         key: const ValueKey('search-no-results'),
         child: Text(context.l10n.noSearchResults),
       );
     }
-    return ListView.separated(
-      key: ValueKey('search-results-${_hits.length}-${_controller.text}'),
-      itemCount: _hits.length,
-      separatorBuilder: (_, _) => const Divider(height: 1),
-      itemBuilder: (_, i) => _HitTile(hit: _hits[i])
-          .animate(delay: (i < 8 ? 24 * i : 0).ms)
-          .fadeIn(duration: AppMotion.fast)
-          .slideY(begin: 0.04, end: 0, duration: AppMotion.fast),
+
+    final facets = _bookFacets(_result.hits);
+    final visibleHits = _selectedBookId == null
+        ? _result.hits
+        : _result.hits
+              .where((hit) => hit.bookId == _selectedBookId)
+              .toList(growable: false);
+    return Column(
+      key: ValueKey('search-results-${_result.hits.length}-$_resultQuery'),
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _ResultSummary(
+          visibleCount: visibleHits.length,
+          loadedCount: _result.hits.length,
+          filtered: _selectedBookId != null,
+          truncated: _result.truncated,
+        ),
+        if (facets.length > 1)
+          SingleChildScrollView(
+            key: const ValueKey('search-book-filters'),
+            scrollDirection: Axis.horizontal,
+            padding: const EdgeInsets.fromLTRB(
+              AppSpacing.md,
+              0,
+              AppSpacing.md,
+              AppSpacing.sm,
+            ),
+            child: Row(
+              children: [
+                FilterChip(
+                  label: Text(context.l10n.searchAllBooks(_result.hits.length)),
+                  selected: _selectedBookId == null,
+                  onSelected: (_) => setState(() => _selectedBookId = null),
+                ),
+                for (final facet in facets) ...[
+                  const SizedBox(width: AppSpacing.sm),
+                  FilterChip(
+                    label: Text('${facet.title} (${facet.count})'),
+                    selected: _selectedBookId == facet.bookId,
+                    onSelected: (_) =>
+                        setState(() => _selectedBookId = facet.bookId),
+                  ),
+                ],
+              ],
+            ),
+          ),
+        Expanded(
+          child: ListView.separated(
+            key: ValueKey(
+              'search-result-list-${visibleHits.length}-$_selectedBookId',
+            ),
+            itemCount: visibleHits.length,
+            separatorBuilder: (_, _) => const Divider(height: 1),
+            itemBuilder: (_, i) =>
+                _HitTile(
+                      hit: visibleHits[i],
+                      onTap: () => _openHit(visibleHits[i]),
+                    )
+                    .animate(delay: (i < 8 ? 24 * i : 0).ms)
+                    .fadeIn(duration: AppMotion.fast)
+                    .slideY(begin: 0.04, end: 0, duration: AppMotion.fast),
+          ),
+        ),
+      ],
+    );
+  }
+
+  List<_BookFacet> _bookFacets(List<SearchHit> hits) {
+    final counts = <int, _BookFacet>{};
+    for (final hit in hits) {
+      final current = counts[hit.bookId];
+      counts[hit.bookId] = _BookFacet(
+        bookId: hit.bookId,
+        title: hit.bookTitle,
+        count: (current?.count ?? 0) + 1,
+      );
+    }
+    return counts.values.toList(growable: false);
+  }
+
+  void _openHit(SearchHit hit) {
+    final bookHits = _result.hits
+        .where((candidate) => candidate.bookId == hit.bookId)
+        .toList()
+      ..sort((a, b) {
+        final chapterOrder = a.chapterIndex.compareTo(b.chapterIndex);
+        if (chapterOrder != 0) return chapterOrder;
+        return a.charOffset.compareTo(b.charOffset);
+      });
+    final selectedIndex = bookHits.indexWhere(
+      (candidate) =>
+          candidate.chapterIndex == hit.chapterIndex &&
+          candidate.charOffset == hit.charOffset &&
+          candidate.matchLength == hit.matchLength,
+    );
+    final searchContext = ReaderSearchContext(
+      query: _resultQuery,
+      targets: [
+        for (final candidate in bookHits)
+          ReaderSearchTarget(
+            chapterIndex: candidate.chapterIndex,
+            charOffset: candidate.charOffset,
+            matchLength: candidate.matchLength,
+          ),
+      ],
+      initialTargetIndex: selectedIndex < 0 ? 0 : selectedIndex,
+    );
+    Navigator.of(context).push(
+      appRoute(
+        (_) => ReaderPage(bookId: hit.bookId, searchContext: searchContext),
+      ),
     );
   }
 }
 
+class _ResultSummary extends StatelessWidget {
+  final int visibleCount;
+  final int loadedCount;
+  final bool filtered;
+  final bool truncated;
+
+  const _ResultSummary({
+    required this.visibleCount,
+    required this.loadedCount,
+    required this.filtered,
+    required this.truncated,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(
+        AppSpacing.md,
+        AppSpacing.sm,
+        AppSpacing.md,
+        AppSpacing.sm,
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: Text(
+              filtered
+                  ? context.l10n.searchFilteredResultCount(
+                      visibleCount,
+                      loadedCount,
+                    )
+                  : context.l10n.searchResultCount(loadedCount),
+              style: Theme.of(context).textTheme.labelLarge,
+            ),
+          ),
+          if (truncated)
+            Text(
+              context.l10n.searchResultLimitReached(loadedCount),
+              style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                color: Theme.of(context).colorScheme.onSurfaceVariant,
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+class _BookFacet {
+  final int bookId;
+  final String title;
+  final int count;
+
+  const _BookFacet({
+    required this.bookId,
+    required this.title,
+    required this.count,
+  });
+}
+
 class _HitTile extends StatelessWidget {
   final SearchHit hit;
-  const _HitTile({required this.hit});
+  final VoidCallback onTap;
+
+  const _HitTile({required this.hit, required this.onTap});
 
   @override
   Widget build(BuildContext context) {
@@ -185,25 +389,17 @@ class _HitTile extends StatelessWidget {
         overflow: TextOverflow.ellipsis,
       ),
       subtitle: _SnippetText(snippet: hit.snippet),
-      onTap: () => Navigator.of(context).push(
-        appRoute(
-          (_) => ReaderPage(
-            bookId: hit.bookId,
-            initialChapterIndex: hit.chapterIndex,
-            initialCharOffset: hit.charOffset,
-          ),
-        ),
-      ),
+      onTap: onTap,
     );
   }
 }
 
-// 渲染含 <mark>...</mark> 的片段：把标记内的部分高亮显示
+// 渲染含 <mark>...</mark> 的片段：把标记内的部分高亮显示。
 class _SnippetText extends StatelessWidget {
   final String snippet;
+
   const _SnippetText({required this.snippet});
 
-  // 高亮色按主题分别取值：单一固定色无法同时与浅色 / 深色正文拉开区分度
   static const _highlightLight = Color(0xFF2F7D72);
   static const _highlightDark = Color(0xFF6FB8AD);
 
@@ -215,17 +411,17 @@ class _SnippetText extends StatelessWidget {
         ? _highlightDark
         : _highlightLight;
     var lastEnd = 0;
-    for (final m in regex.allMatches(snippet)) {
-      if (m.start > lastEnd) {
-        spans.add(TextSpan(text: snippet.substring(lastEnd, m.start)));
+    for (final match in regex.allMatches(snippet)) {
+      if (match.start > lastEnd) {
+        spans.add(TextSpan(text: snippet.substring(lastEnd, match.start)));
       }
       spans.add(
         TextSpan(
-          text: m.group(1),
+          text: match.group(1),
           style: TextStyle(color: highlightColor, fontWeight: FontWeight.bold),
         ),
       );
-      lastEnd = m.end;
+      lastEnd = match.end;
     }
     if (lastEnd < snippet.length) {
       spans.add(TextSpan(text: snippet.substring(lastEnd)));

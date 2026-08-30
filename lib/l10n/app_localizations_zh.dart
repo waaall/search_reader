@@ -21,6 +21,9 @@ class AppLocalizationsZh extends AppLocalizations {
   String get commonSave => '保存';
 
   @override
+  String get commonClear => '清除';
+
+  @override
   String get commonRetry => '重试';
 
   @override
@@ -253,6 +256,29 @@ class AppLocalizationsZh extends AppLocalizations {
   String get searchEmptyHint => '输入关键词，跨书检索章节内容';
 
   @override
+  String get searchMinimumLength => '请输入至少 2 个字符；当前索引不支持普通正文的单字检索';
+
+  @override
+  String searchResultCount(int count) {
+    return '共 $count 条结果';
+  }
+
+  @override
+  String searchFilteredResultCount(int visible, int total) {
+    return '当前书籍 $visible 条 · 已载入 $total 条';
+  }
+
+  @override
+  String searchResultLimitReached(int limit) {
+    return '仅显示前 $limit 条';
+  }
+
+  @override
+  String searchAllBooks(int count) {
+    return '全部 ($count)';
+  }
+
+  @override
   String get noSearchResults => '没有匹配结果';
 
   @override
@@ -285,6 +311,27 @@ class AppLocalizationsZh extends AppLocalizations {
   String get contentsTitle => '目录';
 
   @override
+  String currentChapterPosition(int current, int total) {
+    return '当前第 $current / $total 章';
+  }
+
+  @override
+  String get chapterSearchHint => '搜索章节名';
+
+  @override
+  String chapterSearchResultCount(int count) {
+    return '$count 条';
+  }
+
+  @override
+  String get noChapterSearchResults => '没有匹配的章节';
+
+  @override
+  String chapterCount(int count) {
+    return '$count 章';
+  }
+
+  @override
   String get contentsAndBookmarks => '目录和书签';
 
   @override
@@ -305,6 +352,26 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String get nextChapter => '下一章';
+
+  @override
+  String searchMatchPosition(int current, int total) {
+    return '$current/$total';
+  }
+
+  @override
+  String get previousSearchMatch => '上一个搜索结果';
+
+  @override
+  String get nextSearchMatch => '下一个搜索结果';
+
+  @override
+  String get closeSearchNavigation => '关闭搜索定位';
+
+  @override
+  String get continueToNextChapter => '继续滚动进入下一章';
+
+  @override
+  String get endOfBook => '已读到全书末尾';
 
   @override
   String get justNow => '刚刚';

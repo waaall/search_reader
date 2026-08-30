@@ -432,6 +432,7 @@ class SearchHit {
   final String chapterTitle;
   final String snippet; // 含 <mark> 标记的上下文片段
   final int charOffset; // 命中关键词在章节内的字符偏移，用于跳转定位
+  final int matchLength; // 命中文本长度，用于阅读器标出当前活动命中
 
   const SearchHit({
     required this.bookId,
@@ -441,6 +442,7 @@ class SearchHit {
     required this.chapterTitle,
     required this.snippet,
     required this.charOffset,
+    required this.matchLength,
   });
 }
 
@@ -478,7 +480,8 @@ class SearchDao {
   final Database? _database;
   Database get _db => _database ?? AppDatabase.instance.db;
 
-  // 跨书全文搜索：返回命中行的元信息 + 起止位置 + 文件路径，最多 100 条
+  // 跨书全文搜索：返回命中章节的元信息 + 起止位置 + 文件路径。
+  // 这里的 limit 是候选章节数；最终出现位置数量由 SearchService 单独限制。
   // [ftsQuery] 已 bigram 化的 FTS5 MATCH 表达式
   // 沙盒文件读取与 snippet 生成交给 SearchService，DAO 层不做文件 I/O
   Future<List<ChapterMatchRow>> queryMatches(
@@ -507,7 +510,7 @@ class SearchDao {
         AND NOT EXISTS (
           SELECT 1 FROM import_jobs job WHERE job.book_id = b.id
         )
-      ORDER BY rank
+      ORDER BY rank, b.id, c.chapter_index
       LIMIT ?
       ''',
       [ftsQuery, limit],

@@ -141,10 +141,11 @@ void main() {
       ),
       hasLength(1),
     );
-    final hits = await SearchService(
+    final searchResult = await SearchService(
       dao: SearchDao(database: database),
       storage: storage,
     ).search('搜索目标');
+    final hits = searchResult.hits;
     expect(hits, hasLength(1));
     expect(hits.single.snippet, contains('<mark>搜索目标</mark>'));
     expect(

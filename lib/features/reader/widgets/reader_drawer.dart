@@ -42,7 +42,7 @@ class ReaderDrawer extends ConsumerWidget {
               Expanded(
                 child: TabBarView(
                   children: [
-                    _ChaptersTab(
+                    ChapterDirectory(
                       chapters: chapters,
                       currentIndex: currentChapterIndex,
                       onJump: (i) => onJump(i, 0),
@@ -63,44 +63,348 @@ class ReaderDrawer extends ConsumerWidget {
   }
 }
 
-class _ChaptersTab extends StatelessWidget {
+class ChapterDirectory extends StatefulWidget {
   final List<Chapter> chapters;
   final int currentIndex;
   final void Function(int chapterIndex) onJump;
+  final ScrollController? scrollController;
 
-  const _ChaptersTab({
+  const ChapterDirectory({
+    super.key,
     required this.chapters,
     required this.currentIndex,
     required this.onJump,
+    this.scrollController,
   });
 
   @override
-  Widget build(BuildContext context) {
-    return ListView.builder(
-      itemCount: chapters.length,
-      itemBuilder: (_, i) {
-        final c = chapters[i];
-        final isCurrent = i == currentIndex;
-        return ListTile(
-          dense: true,
-          title: Text(
-            c.title,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: TextStyle(
-              color: isCurrent ? Theme.of(context).colorScheme.primary : null,
-              fontWeight: isCurrent ? FontWeight.bold : null,
-            ),
-          ),
-          onTap: () {
-            // 只关闭抽屉，不走页面 Navigator.pop，避免触发阅读页退出逻辑
-            Scaffold.of(context).closeDrawer();
-            onJump(i);
-          },
-        );
-      },
+  State<ChapterDirectory> createState() => _ChapterDirectoryState();
+}
+
+class _ChapterDirectoryState extends State<ChapterDirectory> {
+  static const double _rowExtent = 48;
+
+  final TextEditingController _queryController = TextEditingController();
+  final Set<int> _expandedVolumeIds = {};
+  late final ScrollController _scrollController;
+  String _query = '';
+
+  @override
+  void initState() {
+    super.initState();
+    _ensureCurrentVolumeExpanded();
+    final rows = _visibleRows();
+    final currentRow = _currentRowIndex(rows);
+    final initialOffset = currentRow < 0
+        ? 0.0
+        : ((currentRow - 2).clamp(0, rows.length) * _rowExtent);
+    _scrollController =
+        widget.scrollController ??
+        ScrollController(initialScrollOffset: initialOffset);
+  }
+
+  @override
+  void didUpdateWidget(ChapterDirectory oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.currentIndex != widget.currentIndex ||
+        oldWidget.chapters != widget.chapters) {
+      _ensureCurrentVolumeExpanded();
+      WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToCurrent());
+    }
+  }
+
+  @override
+  void dispose() {
+    _queryController.dispose();
+    if (widget.scrollController == null) _scrollController.dispose();
+    super.dispose();
+  }
+
+  void _ensureCurrentVolumeExpanded() {
+    for (final group in _chapterGroups(widget.chapters)) {
+      if (group.volumeId != null &&
+          group.chapters.any(
+            (chapter) => chapter.chapterIndex == widget.currentIndex,
+          )) {
+        _expandedVolumeIds.add(group.volumeId!);
+      }
+    }
+  }
+
+  void _scrollToCurrent() {
+    if (!mounted || !_scrollController.hasClients || _query.isNotEmpty) return;
+    final rows = _visibleRows();
+    final index = _currentRowIndex(rows);
+    if (index < 0) return;
+    final position = _scrollController.position;
+    final target = ((index - 2).clamp(0, rows.length) * _rowExtent).clamp(
+      position.minScrollExtent,
+      position.maxScrollExtent,
+    );
+    _scrollController.animateTo(
+      target,
+      duration: const Duration(milliseconds: 220),
+      curve: Curves.easeOut,
     );
   }
+
+  int _currentRowIndex(List<_DirectoryRow> rows) => rows.indexWhere(
+    (row) =>
+        row is _ChapterRow && row.chapter.chapterIndex == widget.currentIndex,
+  );
+
+  List<_DirectoryRow> _visibleRows() {
+    if (_query.isNotEmpty) {
+      final normalized = _query.toLowerCase();
+      return [
+        for (final chapter in widget.chapters)
+          if (chapter.title.toLowerCase().contains(normalized))
+            _ChapterRow(chapter),
+      ];
+    }
+
+    final groups = _chapterGroups(widget.chapters);
+    final hasVolumes = groups.any((group) => group.volumeId != null);
+    if (!hasVolumes) {
+      return [for (final chapter in widget.chapters) _ChapterRow(chapter)];
+    }
+
+    final rows = <_DirectoryRow>[];
+    for (final group in groups) {
+      final volumeId = group.volumeId;
+      if (volumeId == null) {
+        rows.addAll(group.chapters.map(_ChapterRow.new));
+        continue;
+      }
+      final expanded = _expandedVolumeIds.contains(volumeId);
+      rows.add(
+        _VolumeRow(
+          volumeId: volumeId,
+          title: group.title!,
+          chapterCount: group.chapters.length,
+          expanded: expanded,
+        ),
+      );
+      if (expanded) rows.addAll(group.chapters.map(_ChapterRow.new));
+    }
+    return rows;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final rows = _visibleRows();
+    return Column(
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 10, 16, 4),
+          child: Row(
+            children: [
+              Expanded(
+                child: Text(
+                  context.l10n.currentChapterPosition(
+                    widget.currentIndex + 1,
+                    widget.chapters.length,
+                  ),
+                  style: Theme.of(
+                    context,
+                  ).textTheme.labelLarge?.copyWith(fontWeight: FontWeight.w600),
+                ),
+              ),
+              if (_query.isNotEmpty)
+                Text(
+                  context.l10n.chapterSearchResultCount(rows.length),
+                  style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  ),
+                ),
+            ],
+          ),
+        ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(12, 4, 12, 8),
+          child: TextField(
+            key: const ValueKey('chapter-search-field'),
+            controller: _queryController,
+            decoration: InputDecoration(
+              hintText: context.l10n.chapterSearchHint,
+              prefixIcon: const Icon(Icons.search, size: 20),
+              suffixIcon: _query.isEmpty
+                  ? null
+                  : IconButton(
+                      tooltip: context.l10n.commonClear,
+                      icon: const Icon(Icons.clear, size: 18),
+                      onPressed: () {
+                        _queryController.clear();
+                        setState(() => _query = '');
+                        WidgetsBinding.instance.addPostFrameCallback(
+                          (_) => _scrollToCurrent(),
+                        );
+                      },
+                    ),
+              isDense: true,
+              border: const OutlineInputBorder(),
+            ),
+            onChanged: (value) => setState(() => _query = value.trim()),
+          ),
+        ),
+        const Divider(height: 1),
+        Expanded(
+          child: rows.isEmpty
+              ? Center(
+                  key: const ValueKey('chapter-search-empty'),
+                  child: Text(
+                    context.l10n.noChapterSearchResults,
+                    style: TextStyle(
+                      color: Theme.of(context).colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                )
+              : ListView.builder(
+                  key: const ValueKey('chapter-directory-list'),
+                  controller: _scrollController,
+                  itemExtent: _rowExtent,
+                  itemCount: rows.length,
+                  itemBuilder: (context, index) {
+                    final row = rows[index];
+                    if (row is _VolumeRow) {
+                      return ListTile(
+                        key: ValueKey('volume-row-${row.volumeId}'),
+                        dense: true,
+                        leading: Icon(
+                          row.expanded
+                              ? Icons.expand_more
+                              : Icons.chevron_right,
+                        ),
+                        title: Text(
+                          row.title,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(fontWeight: FontWeight.w600),
+                        ),
+                        trailing: Text(
+                          context.l10n.chapterCount(row.chapterCount),
+                        ),
+                        onTap: () => setState(() {
+                          if (row.expanded) {
+                            _expandedVolumeIds.remove(row.volumeId);
+                          } else {
+                            _expandedVolumeIds.add(row.volumeId);
+                          }
+                        }),
+                      );
+                    }
+
+                    final chapter = (row as _ChapterRow).chapter;
+                    final isCurrent =
+                        chapter.chapterIndex == widget.currentIndex;
+                    return ListTile(
+                      key: ValueKey('chapter-row-${chapter.chapterIndex}'),
+                      dense: true,
+                      selected: isCurrent,
+                      title: Text(
+                        chapter.title,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          color: isCurrent
+                              ? Theme.of(context).colorScheme.primary
+                              : null,
+                          fontWeight: isCurrent ? FontWeight.bold : null,
+                        ),
+                      ),
+                      trailing: _query.isNotEmpty
+                          ? Text('${chapter.chapterIndex + 1}')
+                          : null,
+                      onTap: () {
+                        // 只关闭抽屉，不走页面 Navigator.pop，避免触发阅读页退出逻辑。
+                        Scaffold.maybeOf(context)?.closeDrawer();
+                        widget.onJump(chapter.chapterIndex);
+                      },
+                    );
+                  },
+                ),
+        ),
+      ],
+    );
+  }
+}
+
+abstract class _DirectoryRow {
+  const _DirectoryRow();
+}
+
+class _ChapterRow extends _DirectoryRow {
+  final Chapter chapter;
+
+  const _ChapterRow(this.chapter);
+}
+
+class _VolumeRow extends _DirectoryRow {
+  final int volumeId;
+  final String title;
+  final int chapterCount;
+  final bool expanded;
+
+  const _VolumeRow({
+    required this.volumeId,
+    required this.title,
+    required this.chapterCount,
+    required this.expanded,
+  });
+}
+
+class _ChapterGroup {
+  final int? volumeId;
+  final String? title;
+  final List<Chapter> chapters;
+
+  const _ChapterGroup({
+    required this.volumeId,
+    required this.title,
+    required this.chapters,
+  });
+}
+
+List<_ChapterGroup> _chapterGroups(List<Chapter> chapters) {
+  final groups = <_ChapterGroup>[];
+  int? currentVolumeId;
+  String? currentTitle;
+  var currentChapters = <Chapter>[];
+
+  void flush() {
+    if (currentChapters.isEmpty) return;
+    groups.add(
+      _ChapterGroup(
+        volumeId: currentVolumeId,
+        title: currentTitle,
+        chapters: currentChapters,
+      ),
+    );
+  }
+
+  for (final chapter in chapters) {
+    if (_isVolumeTitle(chapter.title)) {
+      flush();
+      currentVolumeId = chapter.chapterIndex;
+      currentTitle = chapter.title;
+      currentChapters = [chapter];
+    } else {
+      currentChapters.add(chapter);
+    }
+  }
+  flush();
+  return groups;
+}
+
+bool _isVolumeTitle(String title) {
+  final trimmed = title.trim();
+  return RegExp(r'^第\s*[零〇一二三四五六七八九十百千万两\d]+\s*[卷部]').hasMatch(trimmed) ||
+      RegExp(r'^[卷部]\s*[零〇一二三四五六七八九十百千万两上下中前后终\d]+').hasMatch(trimmed) ||
+      RegExp(r'^[上下中前后终]\s*[卷部](?:\s|$|[：:])').hasMatch(trimmed) ||
+      RegExp(
+        r'^(?:volume|vol\.?|book|part)\s+[\w\d]+',
+        caseSensitive: false,
+      ).hasMatch(trimmed);
 }
 
 class _BookmarksTab extends ConsumerWidget {

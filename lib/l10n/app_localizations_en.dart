@@ -21,6 +21,9 @@ class AppLocalizationsEn extends AppLocalizations {
   String get commonSave => 'Save';
 
   @override
+  String get commonClear => 'Clear';
+
+  @override
   String get commonRetry => 'Retry';
 
   @override
@@ -273,6 +276,30 @@ class AppLocalizationsEn extends AppLocalizations {
       'Enter keywords to search chapters across your library.';
 
   @override
+  String get searchMinimumLength =>
+      'Enter at least 2 characters. Single-character searches are not supported by the current index.';
+
+  @override
+  String searchResultCount(int count) {
+    return '$count results';
+  }
+
+  @override
+  String searchFilteredResultCount(int visible, int total) {
+    return '$visible in this book · $total loaded';
+  }
+
+  @override
+  String searchResultLimitReached(int limit) {
+    return 'Showing the first $limit';
+  }
+
+  @override
+  String searchAllBooks(int count) {
+    return 'All ($count)';
+  }
+
+  @override
   String get noSearchResults => 'No matching results';
 
   @override
@@ -306,6 +333,27 @@ class AppLocalizationsEn extends AppLocalizations {
   String get contentsTitle => 'Contents';
 
   @override
+  String currentChapterPosition(int current, int total) {
+    return 'Chapter $current of $total';
+  }
+
+  @override
+  String get chapterSearchHint => 'Search chapter titles';
+
+  @override
+  String chapterSearchResultCount(int count) {
+    return '$count matches';
+  }
+
+  @override
+  String get noChapterSearchResults => 'No matching chapters';
+
+  @override
+  String chapterCount(int count) {
+    return '$count chapters';
+  }
+
+  @override
   String get contentsAndBookmarks => 'Contents & bookmarks';
 
   @override
@@ -326,6 +374,26 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get nextChapter => 'Next';
+
+  @override
+  String searchMatchPosition(int current, int total) {
+    return '$current/$total';
+  }
+
+  @override
+  String get previousSearchMatch => 'Previous search result';
+
+  @override
+  String get nextSearchMatch => 'Next search result';
+
+  @override
+  String get closeSearchNavigation => 'Close search navigation';
+
+  @override
+  String get continueToNextChapter => 'Keep scrolling for the next chapter';
+
+  @override
+  String get endOfBook => 'End of book';
 
   @override
   String get justNow => 'Just now';

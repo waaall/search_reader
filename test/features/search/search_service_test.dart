@@ -17,7 +17,8 @@ void main() {
     final storage = _FakeBookStorage({1: '前文你好后文', 2: '另一处你好内容'});
     final service = SearchService(dao: _FakeSearchDao(rows), storage: storage);
 
-    final hits = await service.search('你好');
+    final result = await service.search('你好');
+    final hits = result.hits;
 
     expect(hits, hasLength(2));
     expect(storage.chapterReads, [1, 2]);
@@ -61,7 +62,7 @@ void main() {
       final suffix = '后文' * 20000;
       final content = '$prefix搜索目标$suffix';
       final staged = await storage.stageTextFile(content);
-      final hit = await SearchService(
+      final result = await SearchService(
         dao: _FakeSearchDao([
           _row(
             bookId: 1,
@@ -72,6 +73,7 @@ void main() {
         ]),
         storage: storage,
       ).search('搜索目标');
+      final hit = result.hits;
 
       expect(hit, hasLength(1));
       expect(hit.single.charOffset, prefix.length);
@@ -81,6 +83,52 @@ void main() {
     } finally {
       await directory.delete(recursive: true);
     }
+  });
+
+  test('同一章节返回多个出现位置且英文定位不区分大小写', () async {
+    const content = 'Alice 先出现，随后 ALICE 再出现。';
+    final storage = _FakeBookStorage({1: content});
+    final service = SearchService(
+      dao: _FakeSearchDao([_row(bookId: 1, title: '书', content: content)]),
+      storage: storage,
+    );
+
+    final result = await service.search('alice');
+
+    expect(result.hits, hasLength(2));
+    expect(result.hits.map((hit) => hit.charOffset), [
+      content.indexOf('Alice'),
+      content.indexOf('ALICE'),
+    ]);
+    expect(result.hits.every((hit) => hit.matchLength == 5), isTrue);
+  });
+
+  test('结果超过展示上限时截断并明确标记', () async {
+    const content = '命中 命中 命中';
+    final service = SearchService(
+      dao: _FakeSearchDao([_row(bookId: 1, title: '书', content: content)]),
+      storage: _FakeBookStorage({1: content}),
+      resultLimit: 2,
+    );
+
+    final result = await service.search('命中');
+
+    expect(result.hits, hasLength(2));
+    expect(result.truncated, isTrue);
+  });
+
+  test('查询词跨文件块时仍返回一次正确命中', () async {
+    const content = '前文Alice后文';
+    final service = SearchService(
+      dao: _FakeSearchDao([_row(bookId: 1, title: '书', content: content)]),
+      storage: _FakeBookStorage({1: content}, chunkChars: 5),
+    );
+
+    final result = await service.search('alice');
+
+    expect(result.hits, hasLength(1));
+    expect(result.hits.single.charOffset, content.indexOf('Alice'));
+    expect(result.hits.single.snippet, contains('<mark>Alice</mark>'));
   });
 }
 
@@ -119,10 +167,11 @@ class _FakeSearchDao extends SearchDao {
 }
 
 class _FakeBookStorage extends BookStorage {
-  _FakeBookStorage(this.contents, {this.beforeRead});
+  _FakeBookStorage(this.contents, {this.beforeRead, this.chunkChars});
 
   final Map<int, String> contents;
   final Future<void> Function(int bookId)? beforeRead;
+  final int? chunkChars;
   final List<int> chapterReads = [];
 
   @override
@@ -135,6 +184,15 @@ class _FakeBookStorage extends BookStorage {
     final bookId = int.parse(relativePath.split('/').last.split('.').first);
     chapterReads.add(bookId);
     await beforeRead?.call(bookId);
-    yield contents[bookId]!;
+    final content = contents[bookId]!;
+    final size = chunkChars;
+    if (size == null) {
+      yield content;
+      return;
+    }
+    for (var start = 0; start < content.length; start += size) {
+      final end = (start + size).clamp(0, content.length);
+      yield content.substring(start, end);
+    }
   }
 }

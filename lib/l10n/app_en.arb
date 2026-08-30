@@ -4,6 +4,7 @@
   "commonCancel": "Cancel",
   "commonDelete": "Delete",
   "commonSave": "Save",
+  "commonClear": "Clear",
   "commonRetry": "Retry",
   "commonRetrying": "Retrying…",
   "commonSettings": "Settings",
@@ -147,6 +148,26 @@
     }
   },
   "searchEmptyHint": "Enter keywords to search chapters across your library.",
+  "searchMinimumLength": "Enter at least 2 characters. Single-character searches are not supported by the current index.",
+  "searchResultCount": "{count} results",
+  "@searchResultCount": {
+    "placeholders": {"count": {"type": "int"}}
+  },
+  "searchFilteredResultCount": "{visible} in this book · {total} loaded",
+  "@searchFilteredResultCount": {
+    "placeholders": {
+      "visible": {"type": "int"},
+      "total": {"type": "int"}
+    }
+  },
+  "searchResultLimitReached": "Showing the first {limit}",
+  "@searchResultLimitReached": {
+    "placeholders": {"limit": {"type": "int"}}
+  },
+  "searchAllBooks": "All ({count})",
+  "@searchAllBooks": {
+    "placeholders": {"count": {"type": "int"}}
+  },
   "noSearchResults": "No matching results",
   "bookmarksTitle": "Bookmarks",
   "loadBookmarksFailed": "Failed to load bookmarks: {error}",
@@ -162,6 +183,23 @@
   "addBookmark": "Add bookmark",
   "bookmarkNoteHint": "Note (optional)",
   "contentsTitle": "Contents",
+  "currentChapterPosition": "Chapter {current} of {total}",
+  "@currentChapterPosition": {
+    "placeholders": {
+      "current": {"type": "int"},
+      "total": {"type": "int"}
+    }
+  },
+  "chapterSearchHint": "Search chapter titles",
+  "chapterSearchResultCount": "{count} matches",
+  "@chapterSearchResultCount": {
+    "placeholders": {"count": {"type": "int"}}
+  },
+  "noChapterSearchResults": "No matching chapters",
+  "chapterCount": "{count} chapters",
+  "@chapterCount": {
+    "placeholders": {"count": {"type": "int"}}
+  },
   "contentsAndBookmarks": "Contents & bookmarks",
   "unknownChapter": "Unknown chapter",
   "openBookFailed": "Failed to open: {error}",
@@ -178,6 +216,18 @@
   },
   "previousChapter": "Previous",
   "nextChapter": "Next",
+  "searchMatchPosition": "{current}/{total}",
+  "@searchMatchPosition": {
+    "placeholders": {
+      "current": {"type": "int"},
+      "total": {"type": "int"}
+    }
+  },
+  "previousSearchMatch": "Previous search result",
+  "nextSearchMatch": "Next search result",
+  "closeSearchNavigation": "Close search navigation",
+  "continueToNextChapter": "Keep scrolling for the next chapter",
+  "endOfBook": "End of book",
   "justNow": "Just now",
   "minutesAgo": "{minutes, plural, =1{1 minute ago} other{{minutes} minutes ago}}",
   "@minutesAgo": {
