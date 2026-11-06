@@ -71,6 +71,7 @@
   "importPhaseDone": "导入完成",
   "searchHint": "搜索全部书籍内容",
   "searchFailed": "搜索失败：{error}",
+  "searchPartiallyUnavailable": "有 {count} 个章节暂时无法读取，搜索结果可能不完整。",
   "searchEmptyHint": "输入关键词，跨书检索章节内容",
   "searchMinimumLength": "请输入至少 2 个字符；当前索引不支持普通正文的单字检索",
   "searchResultCount": "共 {count} 条结果",

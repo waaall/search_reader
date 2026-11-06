@@ -1,3 +1,4 @@
+// 阅读页面：共用排版环境，按分片懒读取正文，并以实际字符布局保存和恢复位置。
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -15,6 +16,8 @@ import 'bookmark_provider.dart';
 import 'lazy_chapter_paginator.dart';
 import 'reader_provider.dart';
 import 'reader_search_context.dart';
+import 'reader_text_layout.dart';
+import 'reader_text_position.dart';
 import 'segment_text_source.dart';
 import 'widgets/reader_drawer.dart';
 import 'widgets/reader_settings_sheet.dart';
@@ -565,8 +568,22 @@ class _ReaderText extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final query = searchQuery;
+    final layout = ReaderTextLayout.of(context);
+    final span = _highlightedSpan(query);
+    return Text.rich(
+      span,
+      style: style,
+      textScaler: layout.textScaler,
+      textDirection: layout.textDirection,
+      locale: layout.locale,
+      textHeightBehavior: layout.textHeightBehavior,
+      textWidthBasis: layout.textWidthBasis,
+    );
+  }
+
+  TextSpan _highlightedSpan(String? query) {
     if (query == null || query.isEmpty || text.isEmpty) {
-      return Text(text, style: style);
+      return TextSpan(text: text);
     }
 
     final passiveMatches = findTextMatches(
@@ -624,7 +641,7 @@ class _ReaderText extends StatelessWidget {
           style: active
               ? TextStyle(
                   backgroundColor: activeBackground,
-                  fontWeight: FontWeight.w700,
+                  // 高亮只改变颜色，避免字重变化使最终正文与分页度量不一致。
                 )
               : passive
               ? TextStyle(backgroundColor: passiveBackground)
@@ -632,7 +649,7 @@ class _ReaderText extends StatelessWidget {
         ),
       );
     }
-    return Text.rich(TextSpan(children: spans), style: style);
+    return TextSpan(children: spans);
   }
 }
 
@@ -735,12 +752,9 @@ class _PaginatedViewState extends State<SegmentedPaginatedReaderView> {
     initialSegmentIndex: widget.initialSegmentIndex,
     initialSegmentText: widget.initialSegmentText,
   );
-  late final LazyChapterPaginator _paginator = LazyChapterPaginator(
-    source: _source,
-    style: widget.textStyle,
-    contentWidth: widget.contentWidth,
-    contentHeight: widget.contentHeight,
-  );
+  LazyChapterPaginator? _paginator;
+  int _layoutGeneration = 0;
+  late int _layoutAnchorOffset = widget.initialCharOffset;
   final List<ReaderPageSlice> _backPages = [];
   final List<ReaderPageSlice> _forwardPages = [];
   ReaderPageSlice? _current;
@@ -752,19 +766,67 @@ class _PaginatedViewState extends State<SegmentedPaginatedReaderView> {
   void initState() {
     super.initState();
     _source.prefetchAround(widget.initialSegmentIndex);
-    unawaited(_loadInitialPage());
   }
 
-  Future<void> _loadInitialPage() async {
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _configurePaginator();
+  }
+
+  @override
+  void didUpdateWidget(SegmentedPaginatedReaderView oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    _configurePaginator();
+  }
+
+  void _configurePaginator() {
+    final layout = ReaderTextLayout.of(context);
+    final style = DefaultTextStyle.of(context).style.merge(widget.textStyle);
+    final previous = _paginator;
+    if (previous != null &&
+        previous.layout == layout &&
+        previous.style == style &&
+        previous.contentWidth == widget.contentWidth &&
+        previous.contentHeight == widget.contentHeight) {
+      return;
+    }
+
+    // 缩放、字体和可用空间变化后从当前字符重新排页，旧异步结果不得覆盖新布局。
+    final offset = _current?.startOffset ?? _layoutAnchorOffset;
+    _layoutAnchorOffset = offset;
+    final generation = ++_layoutGeneration;
+    final paginator = LazyChapterPaginator(
+      source: _source,
+      style: style,
+      layout: layout,
+      contentWidth: widget.contentWidth,
+      contentHeight: widget.contentHeight,
+    );
+    _paginator = paginator;
+    _backPages.clear();
+    _forwardPages.clear();
+    _current = null;
+    _loadError = null;
+    _loading = true;
+    unawaited(_loadInitialPage(paginator, offset, generation));
+  }
+
+  Future<void> _loadInitialPage(
+    LazyChapterPaginator paginator,
+    int offset,
+    int generation,
+  ) async {
     try {
-      final page = await _paginator.pageFrom(widget.initialCharOffset);
-      if (!mounted) return;
+      final page = await paginator.pageFrom(offset);
+      if (!mounted || generation != _layoutGeneration) return;
       setState(() {
         _current = page;
+        _layoutAnchorOffset = page.startOffset;
         _loading = false;
       });
     } catch (error) {
-      if (!mounted) return;
+      if (!mounted || generation != _layoutGeneration) return;
       setState(() {
         _loadError = error;
         _loading = false;
@@ -783,7 +845,7 @@ class _PaginatedViewState extends State<SegmentedPaginatedReaderView> {
       forward: false,
       load: () => _backPages.isNotEmpty
           ? Future.value(_backPages.removeLast())
-          : _paginator.pageEndingAt(current.startOffset),
+          : _paginator!.pageEndingAt(current.startOffset),
     );
   }
 
@@ -798,7 +860,7 @@ class _PaginatedViewState extends State<SegmentedPaginatedReaderView> {
       forward: true,
       load: () => _forwardPages.isNotEmpty
           ? Future.value(_forwardPages.removeLast())
-          : _paginator.pageFrom(current.endOffset),
+          : _paginator!.pageFrom(current.endOffset),
     );
   }
 
@@ -808,6 +870,7 @@ class _PaginatedViewState extends State<SegmentedPaginatedReaderView> {
   }) async {
     final previous = _current;
     if (previous == null) return;
+    final generation = _layoutGeneration;
     setState(() {
       _loading = true;
       _loadError = null;
@@ -815,7 +878,7 @@ class _PaginatedViewState extends State<SegmentedPaginatedReaderView> {
     });
     try {
       final page = await load();
-      if (!mounted) return;
+      if (!mounted || generation != _layoutGeneration) return;
       if (forward) {
         _backPages.add(previous);
       } else {
@@ -824,12 +887,13 @@ class _PaginatedViewState extends State<SegmentedPaginatedReaderView> {
       _trimHistory(forward ? _backPages : _forwardPages);
       setState(() {
         _current = page;
+        _layoutAnchorOffset = page.startOffset;
         _loading = false;
       });
       widget.onCharOffsetChanged(page.startOffset);
       _source.prefetchAround(_source.segmentIndexForOffset(page.startOffset));
     } catch (error) {
-      if (!mounted) return;
+      if (!mounted || generation != _layoutGeneration) return;
       setState(() {
         _loadError = error;
         _loading = false;
@@ -937,7 +1001,8 @@ class _PaginatedViewState extends State<SegmentedPaginatedReaderView> {
             title: widget.chapterTitle,
             background: widget.themeBg,
             foreground: widget.themeFg,
-            onBack: () => widget.onBack(current?.startOffset ?? 0),
+            onBack: () =>
+                widget.onBack(current?.startOffset ?? _layoutAnchorOffset),
           ),
         ),
         // 总页数未知时只显示章节进度，避免为页码预先布局整章。
@@ -999,8 +1064,9 @@ class _PaginatedViewState extends State<SegmentedPaginatedReaderView> {
             onPrevChapter: widget.onPrevChapter,
             onNextChapter: widget.onNextChapter,
             onOpenChapters: widget.onOpenChapters,
-            onAddBookmark: () =>
-                widget.onAddBookmark(current?.startOffset ?? 0),
+            onAddBookmark: () => widget.onAddBookmark(
+              current?.startOffset ?? _layoutAnchorOffset,
+            ),
             onOpenSettings: widget.onOpenSettings,
           ),
         ),
@@ -1361,6 +1427,7 @@ class _ScrollViewState extends State<SegmentedScrollReaderView> {
   final GlobalKey _centerKey = GlobalKey();
   final GlobalKey _viewportKey = GlobalKey();
   final Map<int, GlobalKey> _segmentKeys = {};
+  final Set<int> _loadedSegments = {};
   bool _didPositionInitially = false;
   bool _userScrollingForward = false;
   bool _changingChapter = false;
@@ -1454,9 +1521,13 @@ class _ScrollViewState extends State<SegmentedScrollReaderView> {
       0,
       segment.charCount,
     );
-    final ratio = localOffset / segment.charCount;
+    final textOffset = ReaderTextPosition.verticalOffsetForCharacter(
+      box,
+      localOffset,
+    );
+    if (textOffset == null) return;
     final segmentOffset = viewport.getOffsetToReveal(box, 0).offset;
-    final target = segmentOffset + box.size.height * ratio;
+    final target = segmentOffset + textOffset;
     final position = _ctrl.position;
     _ctrl.jumpTo(
       target.clamp(position.minScrollExtent, position.maxScrollExtent),
@@ -1474,6 +1545,8 @@ class _ScrollViewState extends State<SegmentedScrollReaderView> {
     RenderBox? selectedBox;
     var nearestTop = double.infinity;
     for (final entry in _segmentKeys.entries) {
+      // 占位和错误提示都不是正文，不能用它们覆盖用户已经保存的阅读位置。
+      if (!_loadedSegments.contains(entry.key)) continue;
       final box = entry.value.currentContext?.findRenderObject() as RenderBox?;
       if (box == null || !box.attached || box.size.height <= 0) continue;
       final viewport = RenderAbstractViewport.of(box);
@@ -1492,17 +1565,18 @@ class _ScrollViewState extends State<SegmentedScrollReaderView> {
       }
     }
     if (selectedIndex == null || selectedBox == null) {
-      return widget.initialCharOffset;
+      return _latestCharOffset;
     }
     final viewport = RenderAbstractViewport.of(selectedBox);
     final itemStart = viewport.getOffsetToReveal(selectedBox, 0).offset;
-    final ratio = ((_ctrl.offset - itemStart) / selectedBox.size.height).clamp(
-      0.0,
-      1.0,
-    );
     final segment = widget.segments[selectedIndex];
     final segmentStart = segment.startChar - widget.chapterStartChar;
-    return (segmentStart + segment.charCount * ratio).round().clamp(
+    final localOffset = ReaderTextPosition.characterAtVerticalOffset(
+      selectedBox,
+      _ctrl.offset - itemStart,
+    );
+    if (localOffset == null) return _latestCharOffset;
+    return (segmentStart + localOffset.clamp(0, segment.charCount)).clamp(
       0,
       _source.chapterCharCount,
     );
@@ -1525,6 +1599,7 @@ class _ScrollViewState extends State<SegmentedScrollReaderView> {
         future: _source.textAt(index),
         builder: (context, snapshot) {
           if (snapshot.hasError) {
+            _loadedSegments.remove(index);
             return Text(
               context.l10n.openBookFailed(snapshot.error!),
               key: key,
@@ -1533,6 +1608,7 @@ class _ScrollViewState extends State<SegmentedScrollReaderView> {
           }
           final text = snapshot.data;
           if (text == null) {
+            _loadedSegments.remove(index);
             return SizedBox(
               key: key,
               // 使用字符数估算占位高度，避免短占位让 Sliver 一次触发大量远处分片读取。
@@ -1540,6 +1616,7 @@ class _ScrollViewState extends State<SegmentedScrollReaderView> {
               child: const Center(child: CircularProgressIndicator()),
             );
           }
+          _loadedSegments.add(index);
           if (index == widget.initialSegmentIndex && !_didPositionInitially) {
             _didPositionInitially = true;
             WidgetsBinding.instance.addPostFrameCallback(

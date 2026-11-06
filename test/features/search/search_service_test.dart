@@ -149,6 +149,49 @@ void main() {
     expect(result.hits.single.snippet, startsWith('这段正文'));
     expect(result.hits.single.snippet, isNot(contains('<mark>')));
   });
+
+  test('局部读取失败保留前后正常命中并报告原因，重试后清除问题', () async {
+    var failing = true;
+    final storage = _FakeBookStorage(
+      {1: '你好前文', 2: '你好中间', 3: '你好后文'},
+      beforeRead: (id) async {
+        if (id == 2 && failing) throw const FileSystemException('暂时无法访问');
+      },
+    );
+    final service = SearchService(
+      dao: _FakeSearchDao([
+        for (final id in [1, 2, 3])
+          _row(bookId: id, title: '书$id', content: '你好正文'),
+      ]),
+      storage: storage,
+    );
+    final partial = await service.search('你好');
+    expect(partial.hits.map((hit) => hit.bookId), [1, 3]);
+    expect(partial.isIncomplete, isTrue);
+    expect(partial.issues.single.bookId, 2);
+    expect(partial.issues.single.error, isA<FileSystemException>());
+    expect(storage.chapterReads, [1, 2, 3]);
+
+    failing = false;
+    final complete = await service.search('你好');
+    expect(complete.hits, hasLength(3));
+    expect(complete.isIncomplete, isFalse);
+  });
+
+  test('所有候选不可读时返回不完整状态而不是普通零结果', () async {
+    final service = SearchService(
+      dao: _FakeSearchDao([_row(bookId: 1, title: '书', content: '你好正文')]),
+      storage: _FakeBookStorage(
+        {1: '你好正文'},
+        beforeRead: (_) async {
+          throw const FileSystemException('暂时无法访问');
+        },
+      ),
+    );
+    final result = await service.search('你好');
+    expect(result.hits, isEmpty);
+    expect(result.isIncomplete, isTrue);
+  });
 }
 
 ChapterMatchRow _row({

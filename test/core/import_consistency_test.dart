@@ -240,6 +240,25 @@ void main() {
     expect(await BookDao(database: database).listAll(), hasLength(1));
   });
 
+  test('正式文件已经发布时临时文件不可用不阻断恢复', () async {
+    final pending = await _createPendingImport(
+      title: '已发布待清日志',
+      content: _content,
+      storage: storage,
+      importDao: importDao,
+    );
+    await storage.finalizeStagedFile(pending.staged);
+    await recoverApplicationData(
+      database,
+      storage: _UnavailableStagingStorage(
+        rootProvider: () async => tempDirectory,
+      ),
+    );
+    expect(await database.query('import_jobs'), isEmpty);
+    expect(await BookDao(database: database).listAll(), hasLength(1));
+    expect(await storage.exists(pending.staged.targetPath), isTrue);
+  });
+
   test('索引读文件期间不长时间占用数据库事务', () async {
     final staged = await storage.stageTextFile(_content);
     final readStarted = Completer<void>();
@@ -345,6 +364,66 @@ void main() {
     );
     expect(await database.query('chapters'), isEmpty);
   });
+
+  for (final jobState in [null, 'indexing', 'ready_to_finalize']) {
+    test('目录权限故障保留书籍和阅读数据：${jobState ?? '已发布'}', () async {
+      final pending = await _createPendingImport(
+        title: '权限故障',
+        content: _content,
+        storage: storage,
+        importDao: importDao,
+      );
+      if (jobState == null) {
+        await storage.finalizeStagedFile(pending.staged);
+        await importDao.markImportComplete(pending.book.id);
+      } else {
+        await database.update('import_jobs', {'state': jobState});
+      }
+      await database.insert('reading_progress', {
+        'book_id': pending.book.id,
+        'chapter_index': 0,
+        'char_offset': 2,
+        'updated_at': 1,
+      });
+      await database.insert('bookmarks', {
+        'book_id': pending.book.id,
+        'chapter_index': 0,
+        'char_offset': 2,
+        'created_at': 1,
+      });
+
+      final booksDirectory = p.join(tempDirectory.path, 'books');
+      try {
+        final chmod = await Process.run('chmod', ['000', booksDirectory]);
+        expect(chmod.exitCode, 0);
+        final filePath = jobState == null
+            ? pending.staged.targetPath
+            : pending.staged.stagedPath;
+        if ((await File(p.join(tempDirectory.path, filePath)).stat()).type !=
+            FileSystemEntityType.notFound) {
+          markTestSkipped('当前用户可绕过目录权限，无法构造权限故障');
+          return;
+        }
+        final report = await recoverApplicationData(database, storage: storage);
+        expect(report.hasIssues, isTrue);
+        expect(await database.query('books'), hasLength(1));
+        expect(await database.query('chapters'), hasLength(1));
+        expect(await database.query('reading_progress'), hasLength(1));
+        expect(await database.query('bookmarks'), hasLength(1));
+        expect(
+          await database.query('import_jobs'),
+          hasLength(jobState == null ? 0 : 1),
+        );
+      } finally {
+        await Process.run('chmod', ['700', booksDirectory]);
+      }
+
+      // 权限恢复后仍可继续完成导入，而非留下永久不可见的半成品。
+      await recoverApplicationData(database, storage: storage);
+      expect(await BookDao(database: database).listAll(), hasLength(1));
+      expect(await storage.exists(pending.staged.targetPath), isTrue);
+    }, skip: Platform.isWindows);
+  }
 
   test('非法书籍路径不会阻断启动或删除用户数据', () async {
     final bookId = await database.insert('books', {
@@ -531,5 +610,21 @@ class _FailingReadStorage extends BookStorage {
     required int endByte,
   }) {
     return Future<String>.error(const FileSystemException('模拟章节读取失败'));
+  }
+}
+
+class _UnavailableStagingStorage extends BookStorage {
+  _UnavailableStagingStorage({required super.rootProvider});
+
+  @override
+  Future<BookFileAvailability> inspectAvailability(String relativePath) {
+    return relativePath.contains('${p.separator}.staging${p.separator}')
+        ? Future.value(BookFileAvailability.unavailable)
+        : super.inspectAvailability(relativePath);
+  }
+
+  @override
+  Future<void> discardStagedFile(StagedBookFile stagedFile) async {
+    throw const FileSystemException('模拟临时文件清理失败');
   }
 }

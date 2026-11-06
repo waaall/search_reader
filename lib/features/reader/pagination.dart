@@ -1,4 +1,7 @@
+// 文本分页算法：所有度量共用阅读排版环境，并保持字符边界连续。
 import 'package:flutter/painting.dart';
+
+import 'reader_text_layout.dart';
 
 // 分页结果：每个元素是一页的文本
 class Pagination {
@@ -39,6 +42,7 @@ class TextPaginator {
     required TextStyle style,
     required double contentWidth,
     required double contentHeight,
+    ReaderTextLayout layout = const ReaderTextLayout(),
   }) {
     if (text.isEmpty || contentWidth <= 0 || contentHeight <= 0) {
       return const Pagination(['']);
@@ -61,7 +65,7 @@ class TextPaginator {
     for (final raw in paragraphs) {
       // 段尾保留 \n，用于在 TextPainter 中产生段距
       final segment = '$raw\n';
-      final h = _measureHeight(segment, style, contentWidth);
+      final h = _measureHeight(segment, style, contentWidth, layout);
 
       if (pageHeight + h <= contentHeight) {
         pageBuffer.write(segment);
@@ -84,6 +88,7 @@ class TextPaginator {
             style: style,
             contentWidth: contentWidth,
             contentHeight: contentHeight,
+            layout: layout,
           );
           pages.add(remaining.substring(0, cut));
           remaining = remaining.substring(cut);
@@ -103,10 +108,11 @@ class TextPaginator {
     required TextStyle style,
     required double contentWidth,
     required double contentHeight,
+    ReaderTextLayout layout = const ReaderTextLayout(),
   }) {
     if (text.isEmpty) return 0;
     if (contentWidth <= 0 || contentHeight <= 0) return 1;
-    if (_measureHeight(text, style, contentWidth) <= contentHeight) {
+    if (_measureHeight(text, style, contentWidth, layout) <= contentHeight) {
       return text.length;
     }
     return _findFitPrefix(
@@ -114,6 +120,7 @@ class TextPaginator {
       style: style,
       contentWidth: contentWidth,
       contentHeight: contentHeight,
+      layout: layout,
     );
   }
 
@@ -123,12 +130,15 @@ class TextPaginator {
     required TextStyle style,
     required double contentWidth,
     required double contentHeight,
+    ReaderTextLayout layout = const ReaderTextLayout(),
   }) {
     if (text.isEmpty) return 0;
     if (contentWidth <= 0 || contentHeight <= 0) {
       return _safeSuffixStart(text, text.length - 1);
     }
-    if (_measureHeight(text, style, contentWidth) <= contentHeight) return 0;
+    if (_measureHeight(text, style, contentWidth, layout) <= contentHeight) {
+      return 0;
+    }
 
     var lo = 0;
     var hi = text.length - 1;
@@ -136,7 +146,12 @@ class TextPaginator {
     while (lo <= hi) {
       final mid = (lo + hi) >> 1;
       final start = _safeSuffixStart(text, mid);
-      final h = _measureHeight(text.substring(start), style, contentWidth);
+      final h = _measureHeight(
+        text.substring(start),
+        style,
+        contentWidth,
+        layout,
+      );
       if (h <= contentHeight) {
         best = start;
         hi = mid - 1;
@@ -148,13 +163,18 @@ class TextPaginator {
   }
 
   // 测量给定文本在指定宽度下的高度
-  static double _measureHeight(String text, TextStyle style, double maxWidth) {
-    final tp = TextPainter(
-      text: TextSpan(text: text, style: style),
-      textDirection: TextDirection.ltr,
-      maxLines: null,
-    )..layout(maxWidth: maxWidth);
-    return tp.height;
+  static double _measureHeight(
+    String text,
+    TextStyle style,
+    double maxWidth,
+    ReaderTextLayout layout,
+  ) {
+    final painter = layout.createPainter(text, style, maxWidth);
+    try {
+      return painter.height;
+    } finally {
+      painter.dispose();
+    }
   }
 
   // 二分找出能放入 contentHeight 的最长前缀字符数
@@ -163,6 +183,7 @@ class TextPaginator {
     required TextStyle style,
     required double contentWidth,
     required double contentHeight,
+    ReaderTextLayout layout = const ReaderTextLayout(),
   }) {
     var lo = 1;
     var hi = text.length;
@@ -170,7 +191,12 @@ class TextPaginator {
     while (lo <= hi) {
       final rawMid = (lo + hi) >> 1;
       final mid = _safePrefixEnd(text, rawMid);
-      final h = _measureHeight(text.substring(0, mid), style, contentWidth);
+      final h = _measureHeight(
+        text.substring(0, mid),
+        style,
+        contentWidth,
+        layout,
+      );
       if (h <= contentHeight) {
         best = mid;
         lo = rawMid + 1;

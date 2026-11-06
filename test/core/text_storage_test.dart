@@ -75,4 +75,35 @@ void main() {
       throwsStateError,
     );
   });
+
+  test('文件状态区分普通文件、明确缺失和非普通路径', () async {
+    final staged = await storage.stageTextFile('正文');
+    expect(
+      await storage.inspectAvailability(staged.stagedPath),
+      BookFileAvailability.available,
+    );
+    expect(
+      await storage.inspectAvailability('books/missing.txt'),
+      BookFileAvailability.missing,
+    );
+    expect(
+      await storage.inspectAvailability('books/.staging'),
+      BookFileAvailability.unavailable,
+    );
+    expect(
+      await storage.inspectAvailability('../outside.txt'),
+      BookFileAvailability.unavailable,
+    );
+  });
+
+  test('符号链接不作为普通正文文件清理', () async {
+    final staged = await storage.stageTextFile('正文');
+    final target = await storage.resolveAbsolute(staged.stagedPath);
+    final link = await storage.resolveAbsolute('books/linked.txt');
+    await Link(link).create(target);
+    expect(
+      await storage.inspectAvailability('books/linked.txt'),
+      BookFileAvailability.unavailable,
+    );
+  }, skip: Platform.isWindows);
 }

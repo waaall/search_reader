@@ -142,6 +142,10 @@
   "importPhaseDone": "Import complete",
   "searchHint": "Search all book content",
   "searchFailed": "Search failed: {error}",
+  "searchPartiallyUnavailable": "Could not read {count} chapters. Results may be incomplete.",
+  "@searchPartiallyUnavailable": {
+    "placeholders": {"count": {"type": "int"}}
+  },
   "@searchFailed": {
     "placeholders": {
       "error": {"type": "Object"}

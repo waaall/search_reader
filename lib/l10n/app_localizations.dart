@@ -524,6 +524,12 @@ abstract class AppLocalizations {
   /// **'Search failed: {error}'**
   String searchFailed(Object error);
 
+  /// No description provided for @searchPartiallyUnavailable.
+  ///
+  /// In en, this message translates to:
+  /// **'Could not read {count} chapters. Results may be incomplete.'**
+  String searchPartiallyUnavailable(int count);
+
   /// No description provided for @searchEmptyHint.
   ///
   /// In en, this message translates to:

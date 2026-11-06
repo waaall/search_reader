@@ -150,6 +150,29 @@ class _SearchPageState extends ConsumerState<SearchPage> {
       body: Column(
         children: [
           const ApplicationDataRecoveryNotice(),
+          if (!_loading && _error == null && _result.isIncomplete)
+            Material(
+              key: const ValueKey('search-partial-warning'),
+              color: Theme.of(context).colorScheme.errorContainer,
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: AppSpacing.md),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        context.l10n.searchPartiallyUnavailable(
+                          _result.issues.length,
+                        ),
+                      ),
+                    ),
+                    TextButton(
+                      onPressed: () => _onChanged(_controller.text),
+                      child: Text(context.l10n.commonRetry),
+                    ),
+                  ],
+                ),
+              ),
+            ),
           Expanded(child: AppAnimatedSwitcher(child: _buildBody())),
         ],
       ),
@@ -280,14 +303,15 @@ class _SearchPageState extends ConsumerState<SearchPage> {
   }
 
   void _openHit(SearchHit hit) {
-    final bookHits = _result.hits
-        .where((candidate) => candidate.bookId == hit.bookId)
-        .toList()
-      ..sort((a, b) {
-        final chapterOrder = a.chapterIndex.compareTo(b.chapterIndex);
-        if (chapterOrder != 0) return chapterOrder;
-        return a.charOffset.compareTo(b.charOffset);
-      });
+    final bookHits =
+        _result.hits
+            .where((candidate) => candidate.bookId == hit.bookId)
+            .toList()
+          ..sort((a, b) {
+            final chapterOrder = a.chapterIndex.compareTo(b.chapterIndex);
+            if (chapterOrder != 0) return chapterOrder;
+            return a.charOffset.compareTo(b.charOffset);
+          });
     final selectedIndex = bookHits.indexWhere(
       (candidate) =>
           candidate.chapterIndex == hit.chapterIndex &&

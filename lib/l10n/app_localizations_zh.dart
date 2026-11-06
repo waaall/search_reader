@@ -253,6 +253,11 @@ class AppLocalizationsZh extends AppLocalizations {
   }
 
   @override
+  String searchPartiallyUnavailable(int count) {
+    return '有 $count 个章节暂时无法读取，搜索结果可能不完整。';
+  }
+
+  @override
   String get searchEmptyHint => '输入关键词，跨书检索章节内容';
 
   @override

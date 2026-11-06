@@ -42,6 +42,7 @@ enum ApplicationDataRecoveryIssueKind {
   indexingImport,
   pendingImportFinalization,
   chapterSearchIndex,
+  bookFileAvailability,
   fileCleanup,
 }
 
@@ -109,7 +110,7 @@ Future<ApplicationDataRecoveryReport> _recoverApplicationData(
 
   await _resumeIndexingImports(db, bookStorage, issues, onProgress: onProgress);
   await _recoverPendingImports(db, bookStorage, issues, onProgress: onProgress);
-  await _removeBrokenBooks(db, bookStorage, onProgress: onProgress);
+  await _removeBrokenBooks(db, bookStorage, issues, onProgress: onProgress);
   await _repairFtsIndex(db, bookStorage, issues, onProgress: onProgress);
   await _cleanupUnreferencedFiles(
     db,
@@ -158,10 +159,11 @@ Future<void> _resumeIndexingImports(
     final bookId = job['book_id'] as int;
     final stagedPath = job['staged_path'] as String;
     final targetPath = job['target_path'] as String;
-    final stagedExists = await storage.exists(stagedPath);
-    final targetExists = await storage.exists(targetPath);
+    final stagedAvailability = await storage.inspectAvailability(stagedPath);
+    final targetAvailability = await storage.inspectAvailability(targetPath);
 
-    if (!stagedExists && !targetExists) {
+    if (stagedAvailability == BookFileAvailability.missing &&
+        targetAvailability == BookFileAvailability.missing) {
       // 索引中断且两侧文件都不存在，数据库半成品已经无法恢复。
       await deleteBookRecords(db, bookId);
       _notifyProgress(
@@ -173,8 +175,13 @@ Future<void> _resumeIndexingImports(
       continue;
     }
 
-    final sourcePath = stagedExists ? stagedPath : targetPath;
     try {
+      // 一侧明确可读即可恢复索引；两侧都无法确认时保留任务和文件。
+      final sourcePath = stagedAvailability == BookFileAvailability.available
+          ? stagedPath
+          : targetAvailability == BookFileAvailability.available
+          ? targetPath
+          : throw StateError('待导入正文暂时不可用：book_id=$bookId');
       await indexPendingImport(
         db,
         bookId: bookId,
@@ -233,10 +240,15 @@ Future<void> _recoverPendingImports(
       stagedPath: job['staged_path'] as String,
       targetPath: job['target_path'] as String,
     );
-    final stagedExists = await storage.exists(stagedFile.stagedPath);
-    final targetExists = await storage.exists(stagedFile.targetPath);
+    final stagedAvailability = await storage.inspectAvailability(
+      stagedFile.stagedPath,
+    );
+    final targetAvailability = await storage.inspectAvailability(
+      stagedFile.targetPath,
+    );
 
-    if (!stagedExists && !targetExists) {
+    if (stagedAvailability == BookFileAvailability.missing &&
+        targetAvailability == BookFileAvailability.missing) {
       // 文件两端都不存在，数据库半成品已无法恢复，整组删除避免坏书进入书架。
       await deleteBookRecords(db, bookId);
       _notifyProgress(
@@ -249,6 +261,11 @@ Future<void> _recoverPendingImports(
     }
 
     try {
+      if (targetAvailability == BookFileAvailability.unavailable ||
+          (targetAvailability != BookFileAvailability.available &&
+              stagedAvailability == BookFileAvailability.unavailable)) {
+        throw StateError('待发布文件状态暂时无法确认：book_id=$bookId');
+      }
       await storage.finalizeStagedFile(stagedFile);
       await db.delete('import_jobs', where: 'book_id = ?', whereArgs: [bookId]);
     } catch (e, st) {
@@ -275,7 +292,8 @@ Future<void> _recoverPendingImports(
 
 Future<void> _removeBrokenBooks(
   Database db,
-  BookStorage storage, {
+  BookStorage storage,
+  List<ApplicationDataRecoveryIssue> issues, {
   ApplicationDataRecoveryProgressCallback? onProgress,
 }) async {
   _notifyProgress(
@@ -308,6 +326,15 @@ Future<void> _removeBrokenBooks(
     if (availability == BookFileAvailability.missing) {
       // 只有存储层明确确认文件不存在时才删除；检查异常时保留数据并继续启动。
       await deleteBookRecords(db, bookId);
+    } else if (availability == BookFileAvailability.unavailable) {
+      issues.add(
+        ApplicationDataRecoveryIssue(
+          kind: ApplicationDataRecoveryIssueKind.bookFileAvailability,
+          bookId: bookId,
+          error: StateError('书籍文件状态暂时无法确认，已保留数据'),
+          stackTrace: StackTrace.current,
+        ),
+      );
     }
   }
 }

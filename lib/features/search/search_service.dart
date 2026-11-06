@@ -10,10 +10,32 @@ const int kDefaultSearchResultLimit = 100;
 class SearchResultSet {
   final List<SearchHit> hits;
   final bool truncated;
+  final List<SearchReadIssue> issues;
 
-  const SearchResultSet({required this.hits, this.truncated = false});
+  const SearchResultSet({
+    required this.hits,
+    this.truncated = false,
+    this.issues = const [],
+  });
+
+  bool get isIncomplete => issues.isNotEmpty;
 
   static const empty = SearchResultSet(hits: []);
+}
+
+// 单章读取失败随结果返回，既保留正常命中，也不把部分成功伪装成完整搜索。
+class SearchReadIssue {
+  final int bookId;
+  final int chapterId;
+  final Object error;
+  final StackTrace stackTrace;
+
+  const SearchReadIssue({
+    required this.bookId,
+    required this.chapterId,
+    required this.error,
+    required this.stackTrace,
+  });
 }
 
 class SearchService {
@@ -57,14 +79,29 @@ class SearchService {
     if (matches.isEmpty) return SearchResultSet.empty;
 
     final hits = <SearchHit>[];
+    final issues = <SearchReadIssue>[];
     for (final match in matches) {
       if (isCancelled?.call() ?? false) return SearchResultSet.empty;
-      final chapterResult = await _readExcerpts(
-        match,
-        raw,
-        maxHits: resultLimit + 1 - hits.length,
-        isCancelled: isCancelled,
-      );
+      _ChapterSearchResult? chapterResult;
+      try {
+        chapterResult = await _readExcerpts(
+          match,
+          raw,
+          maxHits: resultLimit + 1 - hits.length,
+          isCancelled: isCancelled,
+        );
+      } catch (error, stackTrace) {
+        if (isCancelled?.call() ?? false) return SearchResultSet.empty;
+        issues.add(
+          SearchReadIssue(
+            bookId: match.bookId,
+            chapterId: match.chapterId,
+            error: error,
+            stackTrace: stackTrace,
+          ),
+        );
+        continue;
+      }
       if (chapterResult == null) return SearchResultSet.empty;
       for (final excerpt in chapterResult.excerpts) {
         hits.add(
@@ -84,6 +121,7 @@ class SearchService {
         return SearchResultSet(
           hits: hits.take(resultLimit).toList(growable: false),
           truncated: true,
+          issues: List.unmodifiable(issues),
         );
       }
     }
@@ -94,6 +132,7 @@ class SearchService {
     return SearchResultSet(
       hits: hits.take(resultLimit).toList(growable: false),
       truncated: candidateLimitReached || hits.length > resultLimit,
+      issues: List.unmodifiable(issues),
     );
   }
 

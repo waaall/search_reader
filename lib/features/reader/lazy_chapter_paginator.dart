@@ -3,6 +3,7 @@ import 'package:flutter/painting.dart';
 
 import '../../core/parser/render_segmenter.dart';
 import 'pagination.dart';
+import 'reader_text_layout.dart';
 import 'segment_text_source.dart';
 
 class ReaderPageSlice {
@@ -24,6 +25,7 @@ class LazyChapterPaginator {
     required this.contentWidth,
     required this.contentHeight,
     this.policy = ReaderRenderPolicy.defaults,
+    this.layout = const ReaderTextLayout(),
   });
 
   final SegmentTextSource source;
@@ -31,6 +33,7 @@ class LazyChapterPaginator {
   final double contentWidth;
   final double contentHeight;
   final ReaderRenderPolicy policy;
+  final ReaderTextLayout layout;
 
   Future<ReaderPageSlice> pageFrom(int startOffset) async {
     final start = startOffset.clamp(0, source.chapterCharCount);
@@ -49,6 +52,7 @@ class LazyChapterPaginator {
         style: style,
         contentWidth: contentWidth,
         contentHeight: contentHeight,
+        layout: layout,
       );
       if (fit < window.text.length ||
           window.reachesChapterEnd ||
@@ -81,6 +85,7 @@ class LazyChapterPaginator {
         style: style,
         contentWidth: contentWidth,
         contentHeight: contentHeight,
+        layout: layout,
       );
       if (suffixStart > 0 ||
           window.reachesChapterStart ||

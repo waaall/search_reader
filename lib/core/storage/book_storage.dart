@@ -103,12 +103,27 @@ class BookStorage {
     final staged = File(stagedAbsolute);
     final target = File(targetAbsolute);
 
-    if (await target.exists()) {
-      if (await staged.exists()) await staged.delete();
+    final targetAvailability = await inspectAvailability(stagedFile.targetPath);
+    if (targetAvailability == BookFileAvailability.available) {
+      // 正式文件已发布时，临时副本清理失败不应阻断整本书恢复可见。
+      try {
+        await discardStagedFile(stagedFile);
+      } catch (error, stackTrace) {
+        developer.log(
+          '正式正文已发布，临时文件稍后重试清理',
+          name: 'search_reader.book_storage',
+          error: error,
+          stackTrace: stackTrace,
+        );
+      }
       return;
     }
-    if (!await staged.exists()) {
-      throw FileSystemException('导入临时文件不存在', stagedAbsolute);
+    if (targetAvailability == BookFileAvailability.unavailable) {
+      throw FileSystemException('正式文件状态暂时无法确认', targetAbsolute);
+    }
+    if (await inspectAvailability(stagedFile.stagedPath) !=
+        BookFileAvailability.available) {
+      throw FileSystemException('导入临时文件缺失或暂时不可用', stagedAbsolute);
     }
     await target.parent.create(recursive: true);
     await staged.rename(targetAbsolute);
@@ -137,16 +152,24 @@ class BookStorage {
     return File(absolute).exists();
   }
 
-  // 恢复流程只在明确得到 notFound 时删除数据库记录；路径或 I/O 异常均视为暂不可确认。
+  // stat/type 会把权限等错误折叠成 notFound，不能据此执行不可逆清理。
   Future<BookFileAvailability> inspectAvailability(String relativePath) async {
     try {
       final absolute = await resolveAbsolute(relativePath);
-      final stat = await File(absolute).stat();
-      if (stat.type == FileSystemEntityType.file) {
+      final type = await FileSystemEntity.type(absolute, followLinks: false);
+      if (type == FileSystemEntityType.file) {
         return BookFileAvailability.available;
       }
-      if (stat.type == FileSystemEntityType.notFound) {
-        return BookFileAvailability.missing;
+      if (type == FileSystemEntityType.notFound) {
+        try {
+          // length 不读取正文，且失败时保留操作系统错误码，可区分缺失与权限故障。
+          await File(absolute).length();
+        } on FileSystemException catch (error) {
+          if (_isConfirmedMissing(error)) return BookFileAvailability.missing;
+          rethrow;
+        }
+        // 两次检查结论不一致时保留数据，等待下一次恢复重新确认。
+        return BookFileAvailability.unavailable;
       }
       // 目录、链接等非普通文件不应触发不可逆的数据删除，交给后续人工处理。
       developer.log(
@@ -163,6 +186,13 @@ class BookStorage {
       );
       return BookFileAvailability.unavailable;
     }
+  }
+
+  bool _isConfirmedMissing(FileSystemException error) {
+    final code = error.osError?.errorCode;
+    // POSIX ENOENT；Windows ERROR_FILE_NOT_FOUND / ERROR_PATH_NOT_FOUND。
+    // 不将 ENOTDIR、拒绝访问或没有错误码的异常当作文件丢失。
+    return Platform.isWindows ? code == 2 || code == 3 : code == 2;
   }
 
   // 正文统一为 UTF-8，可按字节范围读取单个章节，避免加载整本书。

@@ -126,4 +126,50 @@ void main() {
     expect(find.text('first-book · first-chapter'), findsOneWidget);
     expect(find.text('second-book · second-chapter'), findsNothing);
   });
+
+  for (final withHits in [true, false]) {
+    testWidgets('部分失败提示和重试入口不依赖正常结果数量：$withHits', (tester) async {
+      var attempts = 0;
+      Future<SearchResultSet> search(
+        String raw, {
+        SearchCancellationCheck? isCancelled,
+      }) async {
+        attempts++;
+        return SearchResultSet(
+          hits: withHits ? [hit('normal-result')] : [],
+          issues: attempts == 1
+              ? [
+                  SearchReadIssue(
+                    bookId: 2,
+                    chapterId: 2,
+                    error: StateError('暂时不可读'),
+                    stackTrace: StackTrace.current,
+                  ),
+                ]
+              : [],
+        );
+      }
+
+      await tester.pumpWidget(buildSubject(search));
+      await tester.enterText(find.byType(TextField), 'query');
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const ValueKey('search-partial-warning')),
+        findsOneWidget,
+      );
+      if (withHits) {
+        expect(
+          find.text('normal-result-book · normal-result-chapter'),
+          findsOneWidget,
+        );
+      }
+      await tester.tap(find.text('Retry'));
+      await tester.pumpAndSettle();
+      expect(attempts, 2);
+      expect(
+        find.byKey(const ValueKey('search-partial-warning')),
+        findsNothing,
+      );
+    });
+  }
 }

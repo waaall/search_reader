@@ -272,6 +272,11 @@ class AppLocalizationsEn extends AppLocalizations {
   }
 
   @override
+  String searchPartiallyUnavailable(int count) {
+    return 'Could not read $count chapters. Results may be incomplete.';
+  }
+
+  @override
   String get searchEmptyHint =>
       'Enter keywords to search chapters across your library.';
 
