@@ -61,7 +61,15 @@ class EpubStructureReader {
 
     // spine 是正文的主顺序；即使导航目录缺失，也不影响正文导入。
     for (final idRef in spine.idRefs) {
-      addItem(manifestById[idRef]);
+      final item = manifestById[idRef];
+      if (item == null) {
+        throw FormatException('EPUB spine 引用的资源未在 manifest 登记：$idRef');
+      }
+      // 只校验 spine 的必需正文，不收紧导航或未引用的备用资源兜底。
+      if (_isTextItem(item) && item.file == null) {
+        throw FormatException('EPUB spine 引用的正文章节不存在：$idRef');
+      }
+      addItem(item);
     }
 
     // spine 不完整时，用递归导航补齐被目录引用的正文文件。

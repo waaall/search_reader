@@ -61,6 +61,78 @@ void main() {
     expect(chunks.join(), text);
   });
 
+  for (final prefix in ['', '前缀🙂']) {
+    for (final text in [
+      '',
+      '\uFEFF',
+      '\uFEFF\uFEFF正文🙂',
+      '甲\uFEFF乙',
+      '\uFEFE正文',
+    ]) {
+      test('范围读取保留正文字符：前缀 ${prefix.length}，正文 ${jsonEncode(text)}', () async {
+        final staged = await storage.stageTextFile('$prefix$text');
+        final startByte = utf8.encode(prefix).length;
+        final endByte = startByte + utf8.encode(text).length;
+        expect(
+          await storage.readChapterText(
+            staged.stagedPath,
+            startChar: 0,
+            endChar: text.length,
+            startByte: startByte,
+            endByte: endByte,
+          ),
+          text,
+        );
+        // BOM 的三个字节被拆进不同块时，流式读取也不能遗漏正文字符。
+        for (final chunkBytes in [1, 2, 3, 4, 7]) {
+          expect(
+            await storage
+                .readUtf8RangeChunks(
+                  staged.stagedPath,
+                  startByte: startByte,
+                  endByte: endByte,
+                  chunkBytes: chunkBytes,
+                )
+                .join(),
+            text,
+          );
+        }
+      });
+    }
+  }
+
+  for (final bytes in [
+    [0xEF],
+    [0xEF, 0xBB],
+    [0xEF, 0xBB, 0xBF, 0xFF],
+  ]) {
+    test('保留正文 U+FEFF 时仍严格拒绝无效 UTF-8：$bytes', () async {
+      final staged = await storage.allocateNormalizedStagedFile();
+      await File(
+        await storage.resolveAbsolute(staged.stagedPath),
+      ).writeAsBytes(bytes);
+      await expectLater(
+        storage.readTextRange(
+          staged.stagedPath,
+          startByte: 0,
+          endByte: bytes.length,
+        ),
+        throwsFormatException,
+      );
+      await expectLater(
+        storage
+            .readUtf8RangeChunks(
+              staged.stagedPath,
+              startByte: 0,
+              endByte: bytes.length,
+              chunkBytes: 1,
+            )
+            .join(),
+        throwsFormatException,
+      );
+    });
+  }
+
   test('缺少 UTF-8 字节范围时直接拒绝读取', () async {
     final staged = await storage.stageTextFile('你好世界');
 

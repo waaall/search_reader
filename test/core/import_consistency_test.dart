@@ -3,6 +3,7 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:convert';
 
+import 'package:archive/archive.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:path/path.dart' as p;
 import 'package:search_reader/core/db/application_data_recovery.dart';
@@ -13,6 +14,7 @@ import 'package:search_reader/core/parser/book_format.dart';
 import 'package:search_reader/core/storage/book_storage.dart';
 import 'package:search_reader/domain/book.dart';
 import 'package:search_reader/features/library/book_deletion_service.dart';
+import 'package:search_reader/features/importer/import_progress.dart';
 import 'package:search_reader/features/importer/importer_service.dart';
 import 'package:search_reader/features/search/search_service.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
@@ -46,6 +48,44 @@ void main() {
   tearDown(() async {
     await database.close();
     await tempDirectory.delete(recursive: true);
+  });
+
+  test('缺失 spine 正文的 EPUB 导入失败且不留下书籍或暂存文件', () async {
+    final files = {
+      'META-INF/container.xml':
+          '<container><rootfiles><rootfile full-path="book.opf"/></rootfiles></container>',
+      'book.opf': '''
+<package><manifest>
+  <item id="first" href="first.xhtml" media-type="application/xhtml+xml"/>
+  <item id="second" href="second.xhtml" media-type="application/xhtml+xml"/>
+</manifest><spine><itemref idref="first"/><itemref idref="second"/></spine></package>
+''',
+      'first.xhtml': '<html><body><p>第一章正文</p></body></html>',
+    };
+    final archive = Archive();
+    for (final entry in files.entries) {
+      final bytes = utf8.encode(entry.value);
+      archive.addFile(ArchiveFile(entry.key, bytes.length, bytes));
+    }
+    final source = File(p.join(tempDirectory.path, 'missing.epub'));
+    await source.writeAsBytes(ZipEncoder().encode(archive)!);
+
+    await expectLater(
+      ImporterService(
+        importDao: importDao,
+        storage: storage,
+      ).importFile(source.path),
+      throwsA(isA<ImportException>()),
+    );
+    for (final table in ['books', 'chapters', 'chapters_fts', 'import_jobs']) {
+      expect(await database.query(table), isEmpty);
+    }
+    expect(await source.exists(), isTrue);
+    final remainingFiles = await Directory(p.join(tempDirectory.path, 'books'))
+        .list(recursive: true, followLinks: false)
+        .where((entity) => entity is File)
+        .toList();
+    expect(remainingFiles, isEmpty);
   });
 
   test('元数据和分批 FTS 写入完成后保留待发布日志', () async {

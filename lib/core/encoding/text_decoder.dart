@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import 'gb18030_decoder.dart';
+import 'utf8_content_decoder.dart';
 
 // 检测出的编码标签
 class DetectedEncoding {
@@ -108,7 +109,8 @@ class TextDecoder {
     if (bytes.length.isOdd) codeUnits.add(0xFFFD);
     final raw = String.fromCharCodes(codeUnits);
     // 统一在生成字符/字节范围前替换孤立代理项，保证后续 UTF-8 存储和坐标一致。
-    final text = utf8.decode(utf8.encode(raw));
+    // 正文开头合法的 U+FEFF 必须保留，不能把 BOM 归一化误判成损坏替换。
+    final text = Utf8ContentDecoder.decode(utf8.encode(raw));
     return DecodedText(
       text,
       littleEndian ? DetectedEncoding.utf16Le : DetectedEncoding.utf16Be,

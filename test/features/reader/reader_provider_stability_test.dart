@@ -4,6 +4,7 @@ import 'dart:convert';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:search_reader/core/db/daos.dart';
+import 'package:search_reader/core/parser/render_segmenter.dart';
 import 'package:search_reader/features/reader/reader_provider.dart';
 
 import '../../support/application_fixture.dart';
@@ -16,6 +17,44 @@ void main() {
     await fixture.open();
   });
   tearDown(() => fixture.close());
+
+  for (final missingCache in [false, true]) {
+    test('正文 U+FEFF 落在分片开头仍可完整阅读，缺少缓存：$missingCache', () async {
+      const target = ReaderRenderPolicy.defaultTargetChars;
+      final text = '${'a' * (target - 1)}\n\uFEFF${'正文🙂' * target}';
+      final imported = await fixture.importBytes(
+        'boundary.txt',
+        utf8.encode(text),
+      );
+      if (missingCache) await fixture.db.delete('render_segments');
+      final container = ProviderContainer();
+      final provider = readerProvider(imported.bookId);
+      final sub = container.listen(provider, (_, _) {});
+      try {
+        final reader = await container.read(provider.future);
+        expect(reader.currentChapterSegments[1].startChar, target);
+        final notifier = container.read(provider.notifier);
+        final parts = <String>[];
+        for (
+          var index = 0;
+          index < reader.currentChapterSegments.length;
+          index++
+        ) {
+          parts.add(await notifier.readSegmentText(index));
+        }
+        expect(parts[1], startsWith('\uFEFF'));
+        expect(parts.join(), text);
+        await notifier.saveProgress(target);
+        container.invalidate(provider);
+        final reopened = await container.read(provider.future);
+        expect(reopened.initialSegmentIndex, 1);
+        expect(reopened.initialSegmentText, parts[1]);
+      } finally {
+        sub.close();
+        container.dispose();
+      }
+    });
+  }
 
   for (final missingCache in [false, true]) {
     test('数据库只读仍能打开正文，缺少分片缓存：$missingCache', () async {

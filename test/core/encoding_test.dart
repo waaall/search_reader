@@ -42,6 +42,27 @@ void main() {
     });
 
     for (final littleEndian in [true, false]) {
+      for (final text in ['\uFEFF正文', '\uFEFF\uFEFF🙂�正文', '正常🙂正文']) {
+        test('合法 UTF-16 不因正文 U+FEFF 或代理对而误报：$littleEndian，$text', () {
+          final result = TextDecoder.decode(
+            _utf16Bytes(text, littleEndian: littleEndian),
+          );
+          expect(result.content, text);
+          expect(result.hadErrors, isFalse);
+        });
+      }
+
+      test('UTF-16 开头 U+FEFF 不掩盖其后的孤立代理项：$littleEndian', () {
+        final result = TextDecoder.decode(
+          _utf16Bytes(
+            '\uFEFF${String.fromCharCode(0xD800)}尾',
+            littleEndian: littleEndian,
+          ),
+        );
+        expect(result.content, '\uFEFF�尾');
+        expect(result.hadErrors, isTrue);
+      });
+
       test('UTF-16 损坏尾字节和孤立代理项可以局部恢复：$littleEndian', () {
         final units = [0x4F60, 0xD800, 0x597D];
         final bytes = <int>[
@@ -111,4 +132,18 @@ void main() {
       expect(result.encoding, DetectedEncoding.utf16Le);
     });
   });
+}
+
+Uint8List _utf16Bytes(String text, {required bool littleEndian}) {
+  return Uint8List.fromList([
+    if (littleEndian) ...[0xFF, 0xFE] else ...[0xFE, 0xFF],
+    for (final unit in text.codeUnits)
+      if (littleEndian) ...[
+        unit & 0xFF,
+        unit >> 8,
+      ] else ...[
+        unit >> 8,
+        unit & 0xFF,
+      ],
+  ]);
 }

@@ -18,6 +18,60 @@ void main() {
     await tempDirectory.delete(recursive: true);
   });
 
+  for (final missingManifestEntry in [false, true]) {
+    test('拒绝缺失 spine 正文或未登记的引用：$missingManifestEntry', () async {
+      final epubPath = await _writeEpub(tempDirectory, {
+        'META-INF/container.xml': _containerXml('OPS/book.opf'),
+        'OPS/book.opf':
+            '''
+<package>
+  <manifest>
+    <item id="one" href="one.xhtml" media-type="application/xhtml+xml"/>
+    ${missingManifestEntry ? '' : '<item id="two" href="two.xhtml" media-type="application/xhtml+xml"/>'}
+  </manifest>
+  <spine><itemref idref="one"/><itemref idref="two"/></spine>
+</package>
+''',
+        'OPS/one.xhtml': '<html><body><p>第一章正文</p></body></html>',
+      });
+      final error = isA<EpubParseException>().having(
+        (error) => error.message,
+        '缺失引用',
+        contains('two'),
+      );
+      await expectLater(EpubParser().parse(epubPath), throwsA(error));
+      await expectLater(
+        EpubParser().parseToFile(
+          epubPath,
+          p.join(tempDirectory.path, 'missing.txt'),
+        ),
+        throwsA(error),
+      );
+    });
+  }
+
+  test('非 spine 的缺失资源不收紧导航与 manifest 兜底', () async {
+    final epubPath = await _writeEpub(tempDirectory, {
+      'META-INF/container.xml': _containerXml('OPS/book.opf'),
+      'OPS/book.opf': '''
+<package>
+  <manifest>
+    <item id="one" href="one.xhtml" media-type="application/xhtml+xml"/>
+    <item id="nav" href="missing-nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
+    <item id="image" href="missing.png" media-type="image/png"/>
+    <item id="draft" href="missing-draft.xhtml" media-type="application/xhtml+xml"/>
+  </manifest>
+  <spine><itemref idref="one"/></spine>
+</package>
+''',
+      'OPS/one.xhtml': '<html><body><p>完整的正文</p></body></html>',
+    });
+    final outputPath = p.join(tempDirectory.path, 'optional.txt');
+    final manifest = await EpubParser().parseToFile(epubPath, outputPath);
+    expect(manifest.chapters, hasLength(1));
+    expect(await File(outputPath).readAsString(), contains('完整的正文'));
+  });
+
   test('只读取章节 HTML，不加载 EPUB 图片资源', () async {
     final epubPath = p.join(tempDirectory.path, 'book.epub');
     final outputPath = p.join(tempDirectory.path, 'book.txt');

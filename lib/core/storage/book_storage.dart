@@ -1,11 +1,12 @@
 // 沙盒书籍文件管理：通过临时文件发布协议隔离未完成导入。
-import 'dart:convert';
 import 'dart:developer' as developer;
 import 'dart:io';
 
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:uuid/uuid.dart';
+
+import '../encoding/utf8_content_decoder.dart';
 
 typedef StorageRootProvider = Future<Directory> Function();
 
@@ -224,7 +225,7 @@ class BookStorage {
       )) {
         bytes.addAll(chunk);
       }
-      return utf8.decode(bytes);
+      return Utf8ContentDecoder.decode(bytes);
     } finally {
       await handle.close();
     }
@@ -253,12 +254,9 @@ class BookStorage {
     final handle = await file.open();
     try {
       await handle.setPosition(startByte);
-      yield* _readByteChunks(
-        handle,
-        endByte - startByte,
-        chunkBytes,
-        absolute,
-      ).transform(utf8.decoder);
+      yield* Utf8ContentDecoder.decodeStream(
+        _readByteChunks(handle, endByte - startByte, chunkBytes, absolute),
+      );
     } finally {
       await handle.close();
     }

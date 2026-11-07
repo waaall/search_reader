@@ -270,11 +270,14 @@ class LibraryNotifier extends AsyncNotifier<LibraryState> {
       }
     }
     final data = await _loadLibraryData();
+    // 使用最新告警状态，既不因删除清空告警，也不恢复等待期间已被手动关闭的告警。
+    final warnings = (state.value ?? cur).decodingWarningTitles;
     state = AsyncData(
       LibraryState(
         books: data.books,
         progressByBookId: data.progressByBookId,
         error: failures.isEmpty ? null : PartialDeleteFailedError(failures),
+        decodingWarningTitles: warnings,
       ),
     );
   }
