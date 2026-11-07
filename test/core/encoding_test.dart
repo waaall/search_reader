@@ -1,3 +1,4 @@
+// 编码回归：正常输入保持无损，BOM 明确的损坏输入保留可读正文并报告告警。
 import 'dart:convert';
 import 'dart:typed_data';
 
@@ -7,6 +8,68 @@ import 'package:search_reader/core/encoding/text_decoder.dart';
 
 void main() {
   group('TextDecoder', () {
+    test('GB18030 四字节字符与双字节中文混合解码无损', () {
+      final result = TextDecoder.decode(
+        Uint8List.fromList([0x41, 0xC4, 0xE3, 0x95, 0x32, 0x82, 0x36, 0x42]),
+      );
+      expect(result.content, 'A你𠀀B');
+      expect(result.encoding, DetectedEncoding.gb18030);
+      expect(result.hadErrors, isFalse);
+    });
+
+    test('UTF-8 BOM 中坏字节只影响局部，不改变其余正文编码', () {
+      final result = TextDecoder.decode(
+        Uint8List.fromList([
+          0xEF,
+          0xBB,
+          0xBF,
+          ...utf8.encode('前文你好'),
+          0xFF,
+          ...utf8.encode('后文世界'),
+        ]),
+      );
+      expect(result.content, '前文你好�后文世界');
+      expect(result.encoding, DetectedEncoding.utf8Bom);
+      expect(result.hadErrors, isTrue);
+    });
+
+    test('原文合法的替换字符不能被误报为有损解码', () {
+      final result = TextDecoder.decode(
+        Uint8List.fromList([0xEF, 0xBB, 0xBF, ...utf8.encode('已有�字符')]),
+      );
+      expect(result.content, '已有�字符');
+      expect(result.hadErrors, isFalse);
+    });
+
+    for (final littleEndian in [true, false]) {
+      test('UTF-16 损坏尾字节和孤立代理项可以局部恢复：$littleEndian', () {
+        final units = [0x4F60, 0xD800, 0x597D];
+        final bytes = <int>[
+          if (littleEndian) ...[0xFF, 0xFE] else ...[0xFE, 0xFF],
+          for (final unit in units)
+            if (littleEndian) ...[
+              unit & 0xFF,
+              unit >> 8,
+            ] else ...[
+              unit >> 8,
+              unit & 0xFF,
+            ],
+          0x41,
+        ];
+        final result = TextDecoder.decode(Uint8List.fromList(bytes));
+        expect(result.content, '你�好�');
+        expect(result.hadErrors, isTrue);
+        expect(utf8.decode(utf8.encode(result.content)), result.content);
+      });
+    }
+
+    test('传统编码损坏回退会明确上报而不是静默替换', () {
+      final result = TextDecoder.decode(
+        Uint8List.fromList([0xC4, 0xE3, 0xFF, 0x41]),
+      );
+      expect(result.content, '你�A');
+      expect(result.hadErrors, isTrue);
+    });
     test('UTF-8 无 BOM', () {
       final bytes = Uint8List.fromList(utf8.encode('你好世界'));
       final result = TextDecoder.decode(bytes);
@@ -15,8 +78,12 @@ void main() {
     });
 
     test('UTF-8 带 BOM', () {
-      final bytes = Uint8List.fromList(
-          [0xEF, 0xBB, 0xBF, ...utf8.encode('你好世界')]);
+      final bytes = Uint8List.fromList([
+        0xEF,
+        0xBB,
+        0xBF,
+        ...utf8.encode('你好世界'),
+      ]);
       final result = TextDecoder.decode(bytes);
       expect(result.content, '你好世界');
       expect(result.encoding, DetectedEncoding.utf8Bom);
@@ -25,8 +92,7 @@ void main() {
     test('GBK 编码自动识别', () {
       // 用 GbkCodec 编码出非 UTF-8 字节流
       final gbkBytes = const GbkCodec().encode('你好世界');
-      final result =
-          TextDecoder.decode(Uint8List.fromList(gbkBytes));
+      final result = TextDecoder.decode(Uint8List.fromList(gbkBytes));
       expect(result.content, '你好世界');
       expect(result.encoding, DetectedEncoding.gbk);
     });

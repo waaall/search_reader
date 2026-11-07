@@ -1,4 +1,5 @@
 // 导入流程编排：解析源文件、暂存、原子写库并发布正式文件。
+import 'dart:developer' as developer;
 import 'dart:io';
 
 import 'package:path/path.dart' as p;
@@ -97,6 +98,7 @@ class ImporterService {
         title: book.title,
         chapterCount: manifest.chapters.length,
         totalChars: manifest.totalChars,
+        hadDecodingErrors: manifest.hadDecodingErrors,
       );
     } on DecodingException catch (e) {
       await _rollback(stagedFile, pendingBookId);
@@ -112,12 +114,29 @@ class ImporterService {
 
   // 运行期失败尽量撤销两侧；若数据库撤销失败则保留文件和日志供启动恢复。
   Future<void> _rollback(StagedBookFile? stagedFile, int? bookId) async {
-    var databaseWasRolledBack = bookId == null;
+    var databaseWasRolledBack = false;
     if (bookId != null) {
       try {
         await _importDao.cancelPendingImport(bookId);
         databaseWasRolledBack = true;
       } catch (_) {}
+    }
+    if (bookId == null && stagedFile != null) {
+      try {
+        // 索引失败可能发生在元数据提交之后；只有明确无引用才允许删除正文。
+        databaseWasRolledBack = !await _importDao.hasFileReferences({
+          stagedFile.stagedPath,
+          stagedFile.targetPath,
+        });
+      } catch (error, stackTrace) {
+        // 无法对账时宁可保留文件，交给启动恢复，不把暂时的数据库故障升级为文件丢失。
+        developer.log(
+          '导入撤销状态无法确认，保留正文供恢复',
+          name: 'search_reader.importer',
+          error: error,
+          stackTrace: stackTrace,
+        );
+      }
     }
     if (stagedFile != null && databaseWasRolledBack) {
       try {

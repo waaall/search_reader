@@ -8,13 +8,48 @@ import 'package:search_reader/core/db/daos.dart';
 import 'package:search_reader/core/db/database_schema.dart';
 import 'package:search_reader/core/db/render_segment_service.dart';
 import 'package:search_reader/core/parser/render_segmenter.dart';
+import 'package:search_reader/core/parser/book_format.dart';
 import 'package:search_reader/core/storage/book_storage.dart';
 import 'package:search_reader/domain/book.dart';
 import 'package:search_reader/domain/chapter.dart';
+import 'package:search_reader/domain/render_segment.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 void main() {
   setUpAll(sqfliteFfiInit);
+
+  test('派生缓存查询和写入均失败时仍返回有效的内存分片', () async {
+    const text = '正文🙂内容';
+    final chapter = Chapter(
+      id: 1,
+      bookId: 1,
+      chapterIndex: 0,
+      title: '正文',
+      startChar: 0,
+      endChar: text.length,
+      startByte: 0,
+      endByte: utf8.encode(text).length,
+    );
+    final book = Book(
+      id: 1,
+      title: '测试书',
+      filePath: 'books/test.txt',
+      encoding: 'utf-8',
+      totalChars: text.length,
+      createdAt: DateTime(2026),
+    );
+    final dao = _UnavailableSegmentDao();
+    final service = RenderSegmentService(dao: dao, storage: _TextStorage(text));
+    final segments = await service.ensureForChapter(book, chapter);
+    expect(segments.single.startChar, chapter.startChar);
+    expect(segments.single.endChar, chapter.endChar);
+    expect(segments.single.endByte, chapter.endByte);
+    expect(segments.single.id, isNegative);
+    expect(dao.writeAttempts, 1);
+    // 当前调用结束后释放并发任务，下一次仍有机会补写缓存，不能永久缓存失败状态。
+    await service.ensureForChapter(book, chapter);
+    expect(dao.writeAttempts, 2);
+  });
 
   test('首次打开旧章节时补建连续分片且无需重新导入', () async {
     final root = await Directory.systemTemp.createTemp('segment_backfill_');
@@ -112,4 +147,35 @@ void main() {
       await root.delete(recursive: true);
     }
   });
+}
+
+class _UnavailableSegmentDao extends RenderSegmentDao {
+  int writeAttempts = 0;
+
+  @override
+  Future<List<RenderSegment>> listByChapter(int chapterId) async {
+    throw StateError('模拟缓存查询失败');
+  }
+
+  @override
+  Future<void> replaceChapterSegments(
+    int chapterId,
+    List<RenderSegmentDescriptor> segments,
+  ) async {
+    writeAttempts++;
+    throw StateError('模拟缓存写入失败');
+  }
+}
+
+class _TextStorage extends BookStorage {
+  final String text;
+  _TextStorage(this.text);
+
+  @override
+  Stream<String> readUtf8RangeChunks(
+    String relativePath, {
+    required int startByte,
+    required int endByte,
+    int chunkBytes = 64 * 1024,
+  }) => Stream.value(text);
 }

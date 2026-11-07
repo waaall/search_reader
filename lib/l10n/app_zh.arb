@@ -110,5 +110,13 @@
   "hoursAgo": "{hours} 小时前",
   "daysAgo": "{days} 天前",
   "characterCount": "{count} 字",
-  "characterCountTenThousand": "{value} 万字"
+  "characterCountTenThousand": "{value} 万字",
+  "importDecodingWarning": "以下书籍已成功导入，但源文件包含损坏的编码序列，已用 � 替换。请核对相关正文：\n{books}",
+  "@importDecodingWarning": {
+    "placeholders": {
+      "books": {
+        "type": "String"
+      }
+    }
+  }
 }

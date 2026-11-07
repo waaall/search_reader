@@ -1,3 +1,4 @@
+// 书架页面：导入结果、恢复状态和编码告警分开展示，避免局部异常阻断正常阅读。
 import 'package:flutter/material.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -15,6 +16,7 @@ import '../recovery/application_data_recovery_notice.dart';
 import '../search/search_page.dart';
 import '../settings/settings_page.dart';
 import 'library_provider.dart';
+import 'import_warnings_notice.dart';
 
 class LibraryPage extends ConsumerWidget {
   const LibraryPage({super.key});
@@ -55,6 +57,11 @@ class LibraryPage extends ConsumerWidget {
         body: Column(
           children: [
             const ApplicationDataRecoveryNotice(),
+            ImportWarningsNotice(
+              bookTitles: state?.decodingWarningTitles ?? const [],
+              onDismiss: () =>
+                  ref.read(libraryProvider.notifier).dismissDecodingWarnings(),
+            ),
             Expanded(
               child: AppAnimatedSwitcher(
                 child: asyncState.when(

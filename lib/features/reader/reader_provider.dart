@@ -1,4 +1,7 @@
 // 阅读器状态管理：逻辑章节保持稳定，正文只按内部渲染分片读取。
+import 'dart:async';
+import 'dart:developer' as developer;
+
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/db/daos.dart';
@@ -82,7 +85,8 @@ class ReaderNotifier extends AutoDisposeFamilyAsyncNotifier<ReaderState, int> {
     final offset = (progress?.charOffset ?? 0).clamp(0, chapter.charCount);
     final loaded = await _loadChapter(book, chapter, offset);
 
-    await _bookDao.updateLastRead(bookId);
+    // 排序时间不是正文的前置条件，写入变慢或失败都不能阻塞首屏阅读。
+    unawaited(_recordLastRead(bookId));
     return ReaderState(
       book: book,
       chapters: chapters,
@@ -92,6 +96,19 @@ class ReaderNotifier extends AutoDisposeFamilyAsyncNotifier<ReaderState, int> {
       initialSegmentText: loaded.text,
       initialCharOffset: offset,
     );
+  }
+
+  Future<void> _recordLastRead(int bookId) async {
+    try {
+      await _bookDao.updateLastRead(bookId);
+    } catch (error, stackTrace) {
+      developer.log(
+        '最近阅读时间保存失败，继续打开正文',
+        name: 'search_reader.reader',
+        error: error,
+        stackTrace: stackTrace,
+      );
+    }
   }
 
   Future<void> jumpToChapter(int chapterIndex, {int charOffset = 0}) async {
@@ -212,8 +229,16 @@ class ReaderNotifier extends AutoDisposeFamilyAsyncNotifier<ReaderState, int> {
       updatedAt: DateTime.now(),
     );
     final save = _progressSaveQueue.then((_) => _progressDao.save(progress));
-    _progressSaveQueue = save.catchError((_) {});
-    return save;
+    _progressSaveQueue = save.catchError((Object error, StackTrace stackTrace) {
+      // 自动保存失败只影响持久化；保留内存位置并允许后续翻页重新尝试，避免未处理异常。
+      developer.log(
+        '阅读进度保存失败，保留当前内存位置并在后续操作重试',
+        name: 'search_reader.reader',
+        error: error,
+        stackTrace: stackTrace,
+      );
+    });
+    return _progressSaveQueue;
   }
 }
 

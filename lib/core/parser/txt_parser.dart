@@ -1,3 +1,4 @@
+// TXT 解析：正文规范化与范围生成共用解码结果，并保留源编码损坏告警。
 import 'dart:io';
 
 import '../encoding/text_decoder.dart';
@@ -32,6 +33,7 @@ class TxtParser implements BookFormatParser {
       fullText: fullText,
       chapters: chapters,
       encoding: decoded.encoding,
+      hadDecodingErrors: decoded.hadErrors,
     );
   }
 
@@ -111,6 +113,7 @@ class TxtParser implements BookFormatParser {
       encoding: decoded.encoding,
       totalChars: writer.charCount,
       totalBytes: writer.byteCount,
+      hadDecodingErrors: decoded.hadErrors,
     );
   }
 

@@ -262,5 +262,13 @@
     "placeholders": {
       "value": {"type": "String"}
     }
+  },
+  "importDecodingWarning": "These books were imported successfully, but damaged source encoding sequences were replaced with �. Please check the affected text:\n{books}",
+  "@importDecodingWarning": {
+    "placeholders": {
+      "books": {
+        "type": "String"
+      }
+    }
   }
 }

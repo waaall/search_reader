@@ -6,12 +6,14 @@ class ImportResult {
   final String title;
   final int chapterCount;
   final int totalChars;
+  final bool hadDecodingErrors;
 
   const ImportResult({
     required this.bookId,
     required this.title,
     required this.chapterCount,
     required this.totalChars,
+    this.hadDecodingErrors = false,
   });
 }
 

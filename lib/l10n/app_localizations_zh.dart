@@ -405,4 +405,9 @@ class AppLocalizationsZh extends AppLocalizations {
   String characterCountTenThousand(String value) {
     return '$value 万字';
   }
+
+  @override
+  String importDecodingWarning(String books) {
+    return '以下书籍已成功导入，但源文件包含损坏的编码序列，已用 � 替换。请核对相关正文：\n$books';
+  }
 }

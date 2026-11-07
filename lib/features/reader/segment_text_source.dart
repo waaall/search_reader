@@ -134,8 +134,8 @@ class SegmentTextSource {
         buffer.write(text.substring(localStart, localStart + take));
         cursor += take;
       }
-      index++;
-      if (available == 0 && index >= segments.length) break;
+      // 避开代理对后窗口可能尚未填满，不能跳过当前片中还没有读取的正文。
+      if (take >= available) index++;
     }
     return SegmentTextWindow(
       startOffset: start,

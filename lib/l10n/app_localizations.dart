@@ -763,6 +763,12 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'{value}0K characters'**
   String characterCountTenThousand(String value);
+
+  /// No description provided for @importDecodingWarning.
+  ///
+  /// In en, this message translates to:
+  /// **'These books were imported successfully, but damaged source encoding sequences were replaced with �. Please check the affected text:\n{books}'**
+  String importDecodingWarning(String books);
 }
 
 class _AppLocalizationsDelegate

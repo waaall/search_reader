@@ -179,6 +179,125 @@ void main() {
     expect(await database.query('import_jobs'), isEmpty);
   });
 
+  test('索引与数据库撤销同时失败时保留正文，故障消除后仍可续建', () async {
+    final source = File(p.join(tempDirectory.path, 'recoverable.txt'));
+    await source.writeAsString(_content);
+    await database.execute('''
+      CREATE TRIGGER deny_book_delete BEFORE DELETE ON books
+      BEGIN SELECT RAISE(ABORT, '模拟撤销失败'); END
+    ''');
+    await expectLater(
+      ImporterService(
+        importDao: importDao,
+        storage: _FailingReadStorage(rootProvider: () async => tempDirectory),
+      ).importFile(source.path),
+      throwsA(anything),
+    );
+    final job = (await database.query('import_jobs')).single;
+    expect(await storage.exists(job['staged_path'] as String), isTrue);
+    expect(await BookDao(database: database).listAll(), isEmpty);
+
+    // 解除故障后必须能恢复原任务，而非依赖重新导入源文件。
+    await source.delete();
+    await database.execute('DROP TRIGGER deny_book_delete');
+    await recoverApplicationData(database, storage: storage);
+    expect(await BookDao(database: database).listAll(), hasLength(1));
+    expect(await storage.exists(job['target_path'] as String), isTrue);
+    expect(await database.query('import_jobs'), isEmpty);
+  });
+
+  test('撤销引用状态无法查询时保留暂存文件，确认无引用后才清理', () async {
+    final source = File(p.join(tempDirectory.path, 'uncertain.txt'));
+    await source.writeAsString(_content);
+    await expectLater(
+      ImporterService(
+        importDao: _UnavailableReferenceDao(database: database),
+        storage: _FailingReadStorage(rootProvider: () async => tempDirectory),
+      ).importFile(source.path),
+      throwsA(anything),
+    );
+    final staging = Directory(p.join(tempDirectory.path, 'books', '.staging'));
+    expect(await staging.list().toList(), hasLength(1));
+    expect(await database.query('books'), isEmpty);
+    await recoverApplicationData(database, storage: storage);
+    expect(await staging.list().toList(), isEmpty);
+  });
+
+  test('GB18030 四字节字符导入、正文范围和搜索位置保持一致', () async {
+    final source = File(p.join(tempDirectory.path, 'gb18030.txt'));
+    // “你好𠀀世界”的标准 GB18030 字节，包含双字节与四字节混合序列。
+    await source.writeAsBytes([
+      0xC4,
+      0xE3,
+      0xBA,
+      0xC3,
+      0x95,
+      0x32,
+      0x82,
+      0x36,
+      0xCA,
+      0xC0,
+      0xBD,
+      0xE7,
+    ]);
+    final result = await ImporterService(
+      importDao: importDao,
+      storage: storage,
+    ).importFile(source.path);
+    final book = (await BookDao(database: database).findById(result.bookId))!;
+    final chapter = (await ChapterDao(
+      database: database,
+    ).listByBook(book.id)).single;
+    expect(book.encoding, 'gb18030');
+    expect(result.hadDecodingErrors, isFalse);
+    expect(
+      await storage.readChapterText(
+        book.filePath,
+        startChar: chapter.startChar,
+        endChar: chapter.endChar,
+        startByte: chapter.startByte,
+        endByte: chapter.endByte,
+      ),
+      '你好𠀀世界',
+    );
+    final hits = await SearchService(
+      dao: SearchDao(database: database),
+      storage: storage,
+    ).search('世界');
+    expect(hits.hits.single.charOffset, '你好𠀀'.length);
+  });
+
+  test('损坏的 UTF-8 BOM 文本可导入且返回解码告警', () async {
+    final source = File(p.join(tempDirectory.path, 'damaged.txt'));
+    await source.writeAsBytes([
+      0xEF,
+      0xBB,
+      0xBF,
+      ...utf8.encode('正常正文'),
+      0xFF,
+      ...utf8.encode('后续正文'),
+    ]);
+    final result = await ImporterService(
+      importDao: importDao,
+      storage: storage,
+    ).importFile(source.path);
+    expect(result.hadDecodingErrors, isTrue);
+    final book = (await BookDao(database: database).findById(result.bookId))!;
+    final chapter = (await ChapterDao(
+      database: database,
+    ).listByBook(book.id)).single;
+    expect(
+      await storage.readChapterText(
+        book.filePath,
+        startChar: chapter.startChar,
+        endChar: chapter.endChar,
+        startByte: chapter.startByte,
+        endByte: chapter.endByte,
+      ),
+      '正常正文�后续正文',
+    );
+  });
+
   test('启动时完成数据库已提交但文件尚未发布的导入', () async {
     final pending = await _createPendingImport(
       title: '待恢复',
@@ -610,6 +729,15 @@ class _FailingReadStorage extends BookStorage {
     required int endByte,
   }) {
     return Future<String>.error(const FileSystemException('模拟章节读取失败'));
+  }
+}
+
+class _UnavailableReferenceDao extends BookImportDao {
+  _UnavailableReferenceDao({required super.database});
+
+  @override
+  Future<bool> hasFileReferences(Set<String> paths) async {
+    throw StateError('模拟引用查询暂时不可用');
   }
 }
 

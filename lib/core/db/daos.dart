@@ -80,6 +80,23 @@ class BookImportDao {
     await deleteBookRecords(_db, bookId);
   }
 
+  // 调用方未拿到 bookId 不代表事务没有提交；删除暂存文件前必须检查实际引用。
+  Future<bool> hasFileReferences(Set<String> paths) async {
+    if (paths.isEmpty) return false;
+    final placeholders = List.filled(paths.length, '?').join(', ');
+    final rows = await _db.rawQuery(
+      '''
+      SELECT 1 FROM books WHERE file_path IN ($placeholders)
+      UNION ALL
+      SELECT 1 FROM import_jobs
+      WHERE staged_path IN ($placeholders) OR target_path IN ($placeholders)
+      LIMIT 1
+    ''',
+      [...paths, ...paths, ...paths],
+    );
+    return rows.isNotEmpty;
+  }
+
   // 新导入先在短事务内写元数据，文件读取和分词完成后再分批提交 FTS。
   Future<Book> createPendingImportFromManifest({
     required String title,

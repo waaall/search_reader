@@ -1,7 +1,8 @@
+// 文本编码识别：明确的 BOM 优先，损坏序列保留为替换字符并向导入流程报告。
 import 'dart:convert';
 import 'dart:typed_data';
 
-import 'package:enough_convert/enough_convert.dart';
+import 'gb18030_decoder.dart';
 
 // 检测出的编码标签
 class DetectedEncoding {
@@ -10,12 +11,14 @@ class DetectedEncoding {
   static const utf16Le = 'utf-16-le';
   static const utf16Be = 'utf-16-be';
   static const gbk = 'gbk';
+  static const gb18030 = 'gb18030';
 }
 
 class DecodedText {
   final String content;
   final String encoding;
-  const DecodedText(this.content, this.encoding);
+  final bool hadErrors;
+  const DecodedText(this.content, this.encoding, {this.hadErrors = false});
 }
 
 class DecodingException implements Exception {
@@ -25,7 +28,7 @@ class DecodingException implements Exception {
   String toString() => 'DecodingException: $message';
 }
 
-// 文本解码：BOM → UTF-8 严格 → GBK fallback
+// 文本解码：BOM → UTF-8 严格 → GB18030（包含 GBK 双字节子集）。
 class TextDecoder {
   // 主入口：从字节流推断编码并解码
   static DecodedText decode(Uint8List bytes) {
@@ -41,19 +44,26 @@ class TextDecoder {
       // 落到下一个候选
     }
 
-    // 3. GBK fallback（中文小说常见编码，GB18030/GBK 兼容大部分内容）
+    // 3. 使用完整 GB18030 映射；严格失败后才允许替换，并显式上报有损转换。
     try {
-      final text = const GbkCodec(allowInvalid: false).decode(bytes);
-      return DecodedText(text, DetectedEncoding.gbk);
-    } catch (_) {
-      // 再宽松一次（允许个别非法字符替换为占位符）
-      try {
-        final text = const GbkCodec(allowInvalid: true).decode(bytes);
-        return DecodedText(text, DetectedEncoding.gbk);
-      } catch (e) {
-        throw DecodingException('Unable to detect file encoding: $e');
-      }
+      return _decodeLegacy(bytes, allowMalformed: false);
+    } on FormatException {
+      return _decodeLegacy(bytes, allowMalformed: true);
     }
+  }
+
+  static DecodedText _decodeLegacy(
+    Uint8List bytes, {
+    required bool allowMalformed,
+  }) {
+    final result = Gb18030Decoder.decode(bytes, allowMalformed: allowMalformed);
+    return DecodedText(
+      result.content,
+      result.usedFourByteSequence
+          ? DetectedEncoding.gb18030
+          : DetectedEncoding.gbk,
+      hadErrors: result.hadErrors,
+    );
   }
 
   // BOM 头部判断
@@ -62,32 +72,47 @@ class TextDecoder {
         bytes[0] == 0xEF &&
         bytes[1] == 0xBB &&
         bytes[2] == 0xBF) {
-      final text = utf8.decode(bytes.sublist(3));
-      return DecodedText(text, DetectedEncoding.utf8Bom);
+      final body = Uint8List.sublistView(bytes, 3);
+      try {
+        return DecodedText(utf8.decode(body), DetectedEncoding.utf8Bom);
+      } on FormatException {
+        // 编码已经明确，不能因一个坏字节拒绝整本书，也不能转用 GBK 破坏其余正文。
+        return DecodedText(
+          utf8.decode(body, allowMalformed: true),
+          DetectedEncoding.utf8Bom,
+          hadErrors: true,
+        );
+      }
     }
     if (bytes.length >= 2 && bytes[0] == 0xFF && bytes[1] == 0xFE) {
-      final text = _decodeUtf16(bytes.sublist(2), littleEndian: true);
-      return DecodedText(text, DetectedEncoding.utf16Le);
+      return _decodeUtf16(Uint8List.sublistView(bytes, 2), littleEndian: true);
     }
     if (bytes.length >= 2 && bytes[0] == 0xFE && bytes[1] == 0xFF) {
-      final text = _decodeUtf16(bytes.sublist(2), littleEndian: false);
-      return DecodedText(text, DetectedEncoding.utf16Be);
+      return _decodeUtf16(Uint8List.sublistView(bytes, 2), littleEndian: false);
     }
     return null;
   }
 
   // UTF-16 解码：dart:convert 没有官方 codec，手工组装码点
-  static String _decodeUtf16(Uint8List bytes, {required bool littleEndian}) {
-    if (bytes.length.isOdd) {
-      throw DecodingException('UTF-16 byte length is not even');
-    }
+  static DecodedText _decodeUtf16(
+    Uint8List bytes, {
+    required bool littleEndian,
+  }) {
     final codeUnits = <int>[];
-    for (var i = 0; i < bytes.length; i += 2) {
+    for (var i = 0; i + 1 < bytes.length; i += 2) {
       final unit = littleEndian
           ? (bytes[i + 1] << 8) | bytes[i]
           : (bytes[i] << 8) | bytes[i + 1];
       codeUnits.add(unit);
     }
-    return String.fromCharCodes(codeUnits);
+    if (bytes.length.isOdd) codeUnits.add(0xFFFD);
+    final raw = String.fromCharCodes(codeUnits);
+    // 统一在生成字符/字节范围前替换孤立代理项，保证后续 UTF-8 存储和坐标一致。
+    final text = utf8.decode(utf8.encode(raw));
+    return DecodedText(
+      text,
+      littleEndian ? DetectedEncoding.utf16Le : DetectedEncoding.utf16Be,
+      hadErrors: bytes.length.isOdd || text != raw,
+    );
   }
 }

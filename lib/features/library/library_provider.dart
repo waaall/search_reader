@@ -19,6 +19,7 @@ class LibraryState {
   final LibraryError? error;
   final bool selectionMode; // 是否处于多选模式
   final Set<int> selectedIds; // 已选中的书籍 id
+  final List<String> decodingWarningTitles;
 
   const LibraryState({
     this.books = const [],
@@ -27,6 +28,7 @@ class LibraryState {
     this.error,
     this.selectionMode = false,
     this.selectedIds = const {},
+    this.decodingWarningTitles = const [],
   });
 
   LibraryState copyWith({
@@ -38,6 +40,7 @@ class LibraryState {
     bool clearError = false,
     bool? selectionMode,
     Set<int>? selectedIds,
+    List<String>? decodingWarningTitles,
   }) {
     return LibraryState(
       books: books ?? this.books,
@@ -46,6 +49,8 @@ class LibraryState {
       error: clearError ? null : (error ?? this.error),
       selectionMode: selectionMode ?? this.selectionMode,
       selectedIds: selectedIds ?? this.selectedIds,
+      decodingWarningTitles:
+          decodingWarningTitles ?? this.decodingWarningTitles,
     );
   }
 }
@@ -136,7 +141,7 @@ class LibraryNotifier extends AsyncNotifier<LibraryState> {
       ),
     );
     try {
-      await _importer.importFile(
+      final result = await _importer.importFile(
         externalPath,
         onProgress: (phase) {
           state = AsyncData(
@@ -144,6 +149,18 @@ class LibraryNotifier extends AsyncNotifier<LibraryState> {
           );
         },
       );
+      if (result.hadDecodingErrors) {
+        // 批量导入时累积告警，后续成功或失败均不能抹掉此前的有损转换提示。
+        final current = state.value ?? const LibraryState();
+        state = AsyncData(
+          current.copyWith(
+            decodingWarningTitles: List.unmodifiable({
+              ...current.decodingWarningTitles,
+              result.title,
+            }),
+          ),
+        );
+      }
     } on ImportException catch (e) {
       state = AsyncData(
         (state.value ?? const LibraryState()).copyWith(
@@ -162,6 +179,12 @@ class LibraryNotifier extends AsyncNotifier<LibraryState> {
         (state.value ?? const LibraryState()).copyWith(clearImporting: true),
       );
     }
+  }
+
+  void dismissDecodingWarnings() {
+    final current = state.value;
+    if (current == null) return;
+    state = AsyncData(current.copyWith(decodingWarningTitles: const []));
   }
 
   // 刷新书架数据，但保留 error / 多选 / 导入进度 等 UI 状态

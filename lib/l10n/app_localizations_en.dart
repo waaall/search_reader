@@ -451,4 +451,9 @@ class AppLocalizationsEn extends AppLocalizations {
   String characterCountTenThousand(String value) {
     return '${value}0K characters';
   }
+
+  @override
+  String importDecodingWarning(String books) {
+    return 'These books were imported successfully, but damaged source encoding sequences were replaced with �. Please check the affected text:\n$books';
+  }
 }

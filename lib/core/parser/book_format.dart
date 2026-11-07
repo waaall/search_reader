@@ -20,11 +20,13 @@ class ParsedBook {
   final String fullText;
   final List<ParsedChapter> chapters;
   final String encoding;
+  final bool hadDecodingErrors;
 
   const ParsedBook({
     required this.fullText,
     required this.chapters,
     required this.encoding,
+    this.hadDecodingErrors = false,
   });
 
   int get totalChars => fullText.length;
@@ -116,12 +118,14 @@ class BookImportManifest {
   final String encoding;
   final int totalChars;
   final int totalBytes;
+  final bool hadDecodingErrors;
 
   const BookImportManifest({
     required this.chapters,
     required this.encoding,
     required this.totalChars,
     required this.totalBytes,
+    this.hadDecodingErrors = false,
   });
 
   Map<String, Object?> toMap() => {
@@ -129,6 +133,7 @@ class BookImportManifest {
     'encoding': encoding,
     'totalChars': totalChars,
     'totalBytes': totalBytes,
+    'hadDecodingErrors': hadDecodingErrors,
   };
 
   factory BookImportManifest.fromMap(Map<Object?, Object?> map) {
@@ -143,6 +148,7 @@ class BookImportManifest {
       encoding: map['encoding']! as String,
       totalChars: map['totalChars']! as int,
       totalBytes: map['totalBytes']! as int,
+      hadDecodingErrors: map['hadDecodingErrors'] as bool? ?? false,
     );
   }
 }

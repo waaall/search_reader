@@ -12,6 +12,40 @@ import 'package:search_reader/l10n/app_localizations.dart';
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
+  test('代理对附近的前向窗口不能串入远处分片，字符偏移始终连续', () async {
+    final parts = ['abc🙂XYZ', 'TAIL🙂尾'];
+    final source = SegmentTextSource(
+      segments: _segmentsFor(parts),
+      chapterStartChar: 0,
+      readSegment: (index) async => parts[index],
+      initialSegmentIndex: 0,
+      initialSegmentText: parts.first,
+    );
+    final all = parts.join();
+    for (var start = 0; start <= all.length; start++) {
+      for (var size = 1; size <= all.length + 2; size++) {
+        final window = await source.readForward(start, size);
+        expect(window.text, all.substring(start, window.endOffset));
+        expect(window.reachesChapterEnd, window.endOffset == all.length);
+      }
+    }
+    expect((await source.readForward(0, 4)).text, 'abc🙂');
+  });
+
+  test('默认 2048 探测窗口在代理对处仍返回真实连续正文', () async {
+    final parts = ['${'a' * 2047}🙂${'z' * 14000}\n', '${'T' * 16000}\n'];
+    final source = SegmentTextSource(
+      segments: _segmentsFor(parts),
+      chapterStartChar: 0,
+      readSegment: (index) async => parts[index],
+      initialSegmentIndex: 0,
+      initialSegmentText: parts.first,
+    );
+    final window = await source.readForward(0, 2048);
+    expect(window.text, '${'a' * 2047}🙂');
+    expect(window.text, parts.join().substring(0, window.endOffset));
+  });
+
   test('翻页窗口可以跨渲染分片且前后页范围连续', () async {
     const parts = ['第一片没有强制页尾。', '第二片继续同一页。', '第三片结束。'];
     final segments = _segmentsFor(parts);
