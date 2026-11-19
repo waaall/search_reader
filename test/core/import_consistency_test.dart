@@ -2,6 +2,7 @@
 import 'dart:async';
 import 'dart:io';
 import 'dart:convert';
+import 'dart:typed_data';
 
 import 'package:archive/archive.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -11,6 +12,7 @@ import 'package:search_reader/core/db/daos.dart';
 import 'package:search_reader/core/db/database_schema.dart';
 import 'package:search_reader/core/db/text_index.dart';
 import 'package:search_reader/core/parser/book_format.dart';
+import 'package:search_reader/core/parser/epub_parser.dart';
 import 'package:search_reader/core/storage/book_storage.dart';
 import 'package:search_reader/domain/book.dart';
 import 'package:search_reader/features/library/book_deletion_service.dart';
@@ -52,6 +54,60 @@ void main() {
     await database.close();
     await tempDirectory.delete(recursive: true);
   });
+
+  const html =
+      '<html><head><title>章名</title></head><body><p>甲🙂搜索词乙</p></body></html>';
+  const normalized = '章名\n\n甲🙂搜索词乙';
+  for (final endian in [null, Endian.little, Endian.big]) {
+    test('EPUB 章节编码 $endian：规范化正文与全文搜索跳转一致', () async {
+      final bytes = endian == null
+          ? utf8.encode(html)
+          : _utf16WithBom(html, endian);
+      final source = await _writeChapterEpub(tempDirectory, bytes);
+      final parsed = await EpubParser().parse(source.path);
+      expect(parsed.fullText, normalized);
+      expect(parsed.hadDecodingErrors, isFalse);
+      final result = await ImporterService(
+        importDao: importDao,
+        storage: storage,
+      ).importFile(source.path);
+      expect(result.hadDecodingErrors, isFalse);
+      final book = (await BookDao(database: database).findById(result.bookId))!;
+      expect(
+        await storage.readChapterText(
+          book.filePath,
+          startChar: 0,
+          endChar: normalized.length,
+          startByte: 0,
+          endByte: utf8.encode(normalized).length,
+        ),
+        normalized,
+      );
+      final hits = await SearchService(
+        dao: SearchDao(database: database),
+        storage: storage,
+      ).search('搜索词');
+      expect(hits.hits.single.charOffset, normalized.indexOf('搜索词'));
+      expect(hits.hits.single.matchLength, '搜索词'.length);
+    });
+  }
+
+  for (final withBom in [false, true]) {
+    test('EPUB 局部损坏仍可阅读并上报告警，BOM：$withBom', () async {
+      final bytes = withBom
+          ? [..._utf16WithBom(html, Endian.big), 0]
+          : [...utf8.encode(html), 0xff];
+      final source = await _writeChapterEpub(tempDirectory, bytes);
+      final parsed = await EpubParser().parse(source.path);
+      expect(parsed.fullText, contains('甲🙂搜索词乙'));
+      expect(parsed.hadDecodingErrors, isTrue);
+      final result = await ImporterService(
+        importDao: importDao,
+        storage: storage,
+      ).importFile(source.path);
+      expect(result.hadDecodingErrors, isTrue);
+    });
+  }
 
   test('缺失 spine 正文的 EPUB 导入失败且不留下书籍或暂存文件', () async {
     final files = {
@@ -822,4 +878,33 @@ class _UnavailableStagingStorage extends BookStorage {
   Future<void> discardStagedFile(StagedBookFile stagedFile) async {
     throw const FileSystemException('模拟临时文件清理失败');
   }
+}
+
+// 使用相同章节包装不同编码的原始字节，确保测试覆盖真实导入与索引链路。
+Future<File> _writeChapterEpub(Directory root, List<int> chapter) async {
+  final files = {
+    'META-INF/container.xml': utf8.encode(
+      '<container><rootfiles><rootfile full-path="book.opf"/></rootfiles></container>',
+    ),
+    'book.opf': utf8.encode(
+      '<package><manifest><item id="c" href="c.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="c"/></spine></package>',
+    ),
+    'c.xhtml': chapter,
+  };
+  final archive = Archive();
+  for (final entry in files.entries) {
+    archive.addFile(ArchiveFile(entry.key, entry.value.length, entry.value));
+  }
+  return File(
+    p.join(root.path, 'encoded.epub'),
+  ).writeAsBytes(ZipEncoder().encode(archive)!);
+}
+
+List<int> _utf16WithBom(String text, Endian endian) {
+  final units = [0xfeff, ...text.codeUnits];
+  final bytes = ByteData(units.length * 2);
+  for (var i = 0; i < units.length; i++) {
+    bytes.setUint16(i * 2, units[i], endian);
+  }
+  return bytes.buffer.asUint8List();
 }

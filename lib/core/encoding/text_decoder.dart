@@ -67,6 +67,21 @@ class TextDecoder {
     );
   }
 
+  // EPUB 章节只服从明确的 BOM；没有标记时坚持 UTF-8，不猜测其他编码。
+  static DecodedText decodeBomOrUtf8(Uint8List bytes) {
+    final marked = _tryDecodeByBom(bytes);
+    if (marked != null) return marked;
+    try {
+      return DecodedText(utf8.decode(bytes), DetectedEncoding.utf8);
+    } on FormatException {
+      return DecodedText(
+        utf8.decode(bytes, allowMalformed: true),
+        DetectedEncoding.utf8,
+        hadErrors: true,
+      );
+    }
+  }
+
   // BOM 头部判断
   static DecodedText? _tryDecodeByBom(Uint8List bytes) {
     if (bytes.length >= 3 &&
