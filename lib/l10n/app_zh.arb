@@ -1,5 +1,12 @@
 {
   "@@locale": "zh",
+  "unreadableFile": "无法读取文件：{name}",
+  "batchImportProgress": "导入中 · 已处理 {done}/{total}",
+  "batchDeleteProgress": "删除中 · 已处理 {done}/{total}",
+  "batchImportResult": "导入成功 {ok} · 跳过 {skipped} · 失败 {failed}",
+  "batchDeleteResult": "删除成功 {ok} · 失败 {failed}",
+  "batchRefreshing": "正在刷新书架…",
+  "batchRefreshFailed": "书架刷新失败。",
   "appTitle": "小说阅读器",
   "commonCancel": "取消",
   "commonDelete": "删除",

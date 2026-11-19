@@ -9,6 +9,37 @@ class AppLocalizationsEn extends AppLocalizations {
   AppLocalizationsEn([String locale = 'en']) : super(locale);
 
   @override
+  String unreadableFile(String name) {
+    return 'Cannot access file: $name';
+  }
+
+  @override
+  String batchImportProgress(int done, int total) {
+    return 'Importing · processed $done/$total';
+  }
+
+  @override
+  String batchDeleteProgress(int done, int total) {
+    return 'Deleting · processed $done/$total';
+  }
+
+  @override
+  String batchImportResult(int ok, int skipped, int failed) {
+    return 'Imported: $ok · Skipped: $skipped · Failed: $failed';
+  }
+
+  @override
+  String batchDeleteResult(int ok, int failed) {
+    return 'Deleted: $ok · Failed: $failed';
+  }
+
+  @override
+  String get batchRefreshing => 'Refreshing library…';
+
+  @override
+  String get batchRefreshFailed => 'Could not refresh the library.';
+
+  @override
   String get appTitle => 'Search Reader';
 
   @override

@@ -98,6 +98,48 @@ abstract class AppLocalizations {
     Locale('zh'),
   ];
 
+  /// No description provided for @unreadableFile.
+  ///
+  /// In en, this message translates to:
+  /// **'Cannot access file: {name}'**
+  String unreadableFile(String name);
+
+  /// No description provided for @batchImportProgress.
+  ///
+  /// In en, this message translates to:
+  /// **'Importing · processed {done}/{total}'**
+  String batchImportProgress(int done, int total);
+
+  /// No description provided for @batchDeleteProgress.
+  ///
+  /// In en, this message translates to:
+  /// **'Deleting · processed {done}/{total}'**
+  String batchDeleteProgress(int done, int total);
+
+  /// No description provided for @batchImportResult.
+  ///
+  /// In en, this message translates to:
+  /// **'Imported: {ok} · Skipped: {skipped} · Failed: {failed}'**
+  String batchImportResult(int ok, int skipped, int failed);
+
+  /// No description provided for @batchDeleteResult.
+  ///
+  /// In en, this message translates to:
+  /// **'Deleted: {ok} · Failed: {failed}'**
+  String batchDeleteResult(int ok, int failed);
+
+  /// No description provided for @batchRefreshing.
+  ///
+  /// In en, this message translates to:
+  /// **'Refreshing library…'**
+  String get batchRefreshing;
+
+  /// No description provided for @batchRefreshFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'Could not refresh the library.'**
+  String get batchRefreshFailed;
+
   /// No description provided for @appTitle.
   ///
   /// In en, this message translates to:

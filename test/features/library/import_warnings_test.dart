@@ -10,6 +10,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:path/path.dart' as p;
 import 'package:search_reader/core/db/application_data_operation_coordinator.dart';
 import 'package:search_reader/features/library/import_warnings_notice.dart';
+import 'package:search_reader/features/importer/importer_service.dart';
 import 'package:search_reader/features/library/library_error.dart';
 import 'package:search_reader/features/library/library_provider.dart';
 import 'package:search_reader/l10n/app_localizations.dart';
@@ -42,6 +43,9 @@ void main() {
         final library = container.read(libraryProvider).requireValue;
         expect(library.decodingWarningTitles, ['damaged']);
         expect(library.books, hasLength(denyDelete ? 2 : 1));
+        expect(library.batch!.processed, 1);
+        expect(library.batch!.failed, denyDelete ? 1 : 0);
+        expect(library.busy, isFalse);
         expect(library.selectionMode, isFalse);
         expect(library.selectedIds, isEmpty);
         expect(
@@ -139,6 +143,88 @@ void main() {
         container.read(libraryProvider).requireValue.decodingWarningTitles,
         isEmpty,
       );
+    } finally {
+      container.dispose();
+      await fixture.close();
+    }
+  });
+
+  test('混合导入逐项计数；连续点击不会重复导入', () async {
+    final fixture = ApplicationFixture();
+    await fixture.open();
+    final container = ProviderContainer();
+    try {
+      final valid = await File(
+        p.join(fixture.root.path, 'valid.txt'),
+      ).writeAsString('正文');
+      final invalid = await File(
+        p.join(fixture.root.path, 'broken.epub'),
+      ).writeAsString('不是电子书');
+      final unsupported = await File(
+        p.join(fixture.root.path, 'other.pdf'),
+      ).create();
+      final large = await File(
+        p.join(fixture.root.path, 'large.txt'),
+      ).open(mode: FileMode.write);
+      await large.truncate(kMaxTxtBytes + 1);
+      await large.close();
+      final inputs = [
+        unsupported,
+        invalid,
+        File(p.join(fixture.root.path, 'large.txt')),
+        valid,
+      ];
+      FilePicker.platform = _FilesPicker(inputs);
+      await container.read(libraryProvider.future);
+      final counts = <int>[];
+      container.listen(libraryProvider, (_, next) {
+        final batch = next.value?.batch;
+        if (batch != null) {
+          expect(batch.total, inputs.length);
+          if (counts.isEmpty || counts.last != batch.processed) {
+            counts.add(batch.processed);
+          }
+        }
+      });
+      final notifier = container.read(libraryProvider.notifier);
+      await Future.wait([notifier.pickAndImport(), notifier.pickAndImport()]);
+      final library = container.read(libraryProvider).requireValue;
+      expect(counts, [0, 1, 2, 3, 4]);
+      expect(library.batch!.succeeded, 1);
+      expect(library.batch!.skipped, 2);
+      expect(library.batch!.failed, 1);
+      expect(library.books.single.title, 'valid');
+      expect(library.busy, isFalse);
+    } finally {
+      container.dispose();
+      await fixture.close();
+    }
+  });
+
+  test('删除提交后刷新失败，重试只读取书架', () async {
+    final fixture = ApplicationFixture();
+    await fixture.open();
+    final container = ProviderContainer();
+    try {
+      final notifier = await _importWarningBooks(fixture, container);
+      notifier.selectAll();
+      // 仅使进度摘要查询失败，不影响实际删除事务。
+      await fixture.db.execute(
+        'ALTER TABLE reading_progress RENAME TO hidden_progress',
+      );
+      await notifier.deleteSelected();
+      final stale = container.read(libraryProvider).requireValue;
+      expect(stale.refreshFailed, isTrue);
+      expect(stale.busy, isFalse);
+      expect(stale.batch!.succeeded, 2);
+      await fixture.db.execute(
+        'ALTER TABLE hidden_progress RENAME TO reading_progress',
+      );
+      await notifier.retryRefresh();
+      final refreshed = container.read(libraryProvider).requireValue;
+      expect(refreshed.books, isEmpty);
+      expect(refreshed.refreshFailed, isFalse);
+      expect(refreshed.batch, same(stale.batch));
     } finally {
       container.dispose();
       await fixture.close();

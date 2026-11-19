@@ -1,5 +1,62 @@
 {
   "@@locale": "en",
+  "unreadableFile": "Cannot access file: {name}",
+  "@unreadableFile": {
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
+  },
+  "batchImportProgress": "Importing · processed {done}/{total}",
+  "@batchImportProgress": {
+    "placeholders": {
+      "done": {
+        "type": "int"
+      },
+      "total": {
+        "type": "int"
+      }
+    }
+  },
+  "batchDeleteProgress": "Deleting · processed {done}/{total}",
+  "@batchDeleteProgress": {
+    "placeholders": {
+      "done": {
+        "type": "int"
+      },
+      "total": {
+        "type": "int"
+      }
+    }
+  },
+  "batchImportResult": "Imported: {ok} · Skipped: {skipped} · Failed: {failed}",
+  "@batchImportResult": {
+    "placeholders": {
+      "ok": {
+        "type": "int"
+      },
+      "skipped": {
+        "type": "int"
+      },
+      "failed": {
+        "type": "int"
+      }
+    }
+  },
+  "batchDeleteResult": "Deleted: {ok} · Failed: {failed}",
+  "@batchDeleteResult": {
+    "placeholders": {
+      "ok": {
+        "type": "int"
+      },
+      "failed": {
+        "type": "int"
+      }
+    }
+  },
+  "batchRefreshing": "Refreshing library…",
+  "batchRefreshFailed": "Could not refresh the library.",
   "appTitle": "Search Reader",
   "commonCancel": "Cancel",
   "commonDelete": "Delete",

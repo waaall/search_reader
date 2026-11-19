@@ -8,6 +8,7 @@ import '../../core/db/application_data_recovery.dart';
 import '../../core/db/application_data_recovery_provider.dart';
 import '../../shared/l10n/app_l10n.dart';
 import '../../shared/theme/app_tokens.dart';
+import '../library/library_provider.dart';
 
 class ApplicationDataRecoveryNotice extends ConsumerWidget {
   const ApplicationDataRecoveryNotice({super.key});
@@ -67,9 +68,16 @@ class ApplicationDataRecoveryNotice extends ConsumerWidget {
             if (!isRunning) ...[
               const SizedBox(width: AppSpacing.xs),
               TextButton(
-                onPressed: () => unawaited(
-                  ref.read(applicationDataRecoveryProvider.notifier).recover(),
-                ),
+                onPressed:
+                    ref.watch(
+                      libraryProvider.select((s) => s.value?.busy == true),
+                    )
+                    ? null
+                    : () => unawaited(
+                        ref
+                            .read(applicationDataRecoveryProvider.notifier)
+                            .recover(),
+                      ),
                 child: Text(context.l10n.commonRetry),
               ),
             ],

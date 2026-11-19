@@ -46,6 +46,7 @@ class AppFormatters {
   static String libraryError(BuildContext context, LibraryError error) {
     final l10n = context.l10n;
     return switch (error) {
+      UnreadableFileError(:final fileName) => l10n.unreadableFile(fileName),
       FileTooLargeError(:final fileName) => l10n.fileTooLarge(fileName),
       UnsupportedFilesError(:final fileNames) => l10n.unsupportedFileFormats(
         fileNames.join('\n'),

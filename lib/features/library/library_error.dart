@@ -1,3 +1,4 @@
+// 书架操作的结构化错误，界面负责本地化。
 import '../importer/import_progress.dart';
 
 // 书架页可展示的错误数据：只保存结构化信息，具体语言由 UI 层本地化。
@@ -35,4 +36,9 @@ final class DeleteFailure {
 final class PartialDeleteFailedError extends LibraryError {
   final List<DeleteFailure> failures;
   const PartialDeleteFailedError(this.failures);
+}
+
+final class UnreadableFileError extends LibraryError {
+  final String fileName;
+  const UnreadableFileError(this.fileName);
 }

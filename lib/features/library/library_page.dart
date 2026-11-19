@@ -16,6 +16,8 @@ import '../recovery/application_data_recovery_notice.dart';
 import '../search/search_page.dart';
 import '../settings/settings_page.dart';
 import 'library_provider.dart';
+import 'library_batch.dart';
+import 'widgets/library_batch_notice.dart';
 import 'import_warnings_notice.dart';
 
 class LibraryPage extends ConsumerWidget {
@@ -35,6 +37,9 @@ class LibraryPage extends ConsumerWidget {
     final asyncState = ref.watch(libraryProvider);
     // 用 maybeWhen 取出当前状态，只为决定 AppBar / FAB / 返回键行为
     final state = asyncState.value;
+    final mutationsDisabled = recoveryRunning || (state?.busy ?? true);
+    final selectionLocked =
+        state?.busy == true && state?.batch?.kind == LibraryBatchKind.deleting;
     final selectionMode = state?.selectionMode ?? false;
     final selectedCount = state?.selectedIds.length ?? 0;
     final hasBooks = state?.books.isNotEmpty ?? false;
@@ -43,7 +48,7 @@ class LibraryPage extends ConsumerWidget {
       // 多选模式下：拦截系统返回键，先退出多选模式而不是关闭页面
       canPop: !selectionMode,
       onPopInvokedWithResult: (didPop, _) {
-        if (!didPop && selectionMode) {
+        if (!didPop && selectionMode && !selectionLocked) {
           ref.read(libraryProvider.notifier).exitSelection();
         }
       },
@@ -51,7 +56,8 @@ class LibraryPage extends ConsumerWidget {
         appBar: selectionMode
             ? _SelectionAppBar(
                 selectedCount: selectedCount,
-                recoveryRunning: recoveryRunning,
+                selectionLocked: selectionLocked,
+                mutationsDisabled: mutationsDisabled,
               )
             : _NormalAppBar(),
         body: Column(
@@ -62,6 +68,14 @@ class LibraryPage extends ConsumerWidget {
               onDismiss: () =>
                   ref.read(libraryProvider.notifier).dismissDecodingWarnings(),
             ),
+            if (state != null)
+              LibraryBatchNotice(
+                state: state,
+                onDismiss: ref.read(libraryProvider.notifier).dismissBatch,
+                onRetry: mutationsDisabled
+                    ? null
+                    : ref.read(libraryProvider.notifier).retryRefresh,
+              ),
             Expanded(
               child: AppAnimatedSwitcher(
                 child: asyncState.when(
@@ -76,7 +90,7 @@ class LibraryPage extends ConsumerWidget {
                   data: (state) => _Body(
                     key: const ValueKey('library-content'),
                     state: state,
-                    recoveryRunning: recoveryRunning,
+                    mutationsDisabled: mutationsDisabled,
                   ),
                 ),
               ),
@@ -97,7 +111,7 @@ class LibraryPage extends ConsumerWidget {
                   key: const ValueKey('import-fab'),
                   icon: const Icon(Icons.add),
                   label: Text(context.l10n.importBooks),
-                  onPressed: recoveryRunning
+                  onPressed: mutationsDisabled
                       ? null
                       : () =>
                             ref.read(libraryProvider.notifier).pickAndImport(),
@@ -145,11 +159,13 @@ class _NormalAppBar extends StatelessWidget implements PreferredSizeWidget {
 // 多选模式 AppBar：取消 / 已选数量 / 全选 / 删除
 class _SelectionAppBar extends ConsumerWidget implements PreferredSizeWidget {
   final int selectedCount;
-  final bool recoveryRunning;
+  final bool selectionLocked;
+  final bool mutationsDisabled;
 
   const _SelectionAppBar({
     required this.selectedCount,
-    required this.recoveryRunning,
+    required this.selectionLocked,
+    required this.mutationsDisabled,
   });
 
   @override
@@ -162,19 +178,19 @@ class _SelectionAppBar extends ConsumerWidget implements PreferredSizeWidget {
       leading: IconButton(
         tooltip: context.l10n.exitSelection,
         icon: const Icon(Icons.close),
-        onPressed: notifier.exitSelection,
+        onPressed: selectionLocked ? null : notifier.exitSelection,
       ),
       title: Text(context.l10n.selectedBooks(selectedCount)),
       actions: [
         IconButton(
           tooltip: context.l10n.selectAll,
           icon: const Icon(Icons.select_all),
-          onPressed: notifier.selectAll,
+          onPressed: selectionLocked ? null : notifier.selectAll,
         ),
         IconButton(
           tooltip: context.l10n.commonDelete,
           icon: const Icon(Icons.delete_outline),
-          onPressed: selectedCount == 0 || recoveryRunning
+          onPressed: selectedCount == 0 || mutationsDisabled
               ? null
               : () => _confirmAndDelete(context, ref, selectedCount),
         ),
@@ -212,17 +228,21 @@ class _SelectionAppBar extends ConsumerWidget implements PreferredSizeWidget {
 
 class _Body extends ConsumerWidget {
   final LibraryState state;
-  final bool recoveryRunning;
+  final bool mutationsDisabled;
 
-  const _Body({super.key, required this.state, required this.recoveryRunning});
+  const _Body({
+    super.key,
+    required this.state,
+    required this.mutationsDisabled,
+  });
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     return Stack(
       children: [
-        if (state.books.isEmpty && state.importing == null)
+        if (state.books.isEmpty)
           _EmptyHint(
-            onImport: recoveryRunning
+            onImport: mutationsDisabled
                 ? null
                 : () => ref.read(libraryProvider.notifier).pickAndImport(),
           )
@@ -243,7 +263,10 @@ class _Body extends ConsumerWidget {
                     progress: state.progressByBookId[book.id]?.fraction ?? 0,
                     selectionMode: state.selectionMode,
                     selected: state.selectedIds.contains(book.id),
-                    recoveryRunning: recoveryRunning,
+                    selectionLocked:
+                        state.busy &&
+                        state.batch?.kind == LibraryBatchKind.deleting,
+                    mutationsDisabled: mutationsDisabled,
                   )
                   // 列表项依次淡入上滑；仅前若干项错峰，避免滚到远处时延迟过长
                   .animate(delay: (i < 8 ? 40 * i : 0).ms)
@@ -255,41 +278,6 @@ class _Body extends ConsumerWidget {
                     curve: Curves.easeOut,
                   );
             },
-          ),
-        if (state.importing != null)
-          Positioned(
-            left: AppSpacing.md,
-            right: AppSpacing.md,
-            bottom: 90,
-            child:
-                Material(
-                      elevation: 0,
-                      color: Theme.of(context).colorScheme.surface,
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(AppRadius.sm),
-                        side: BorderSide(
-                          color: Theme.of(context).colorScheme.outlineVariant,
-                        ),
-                      ),
-                      child: ListTile(
-                        leading: const SizedBox(
-                          width: 24,
-                          height: 24,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        ),
-                        title: Text(
-                          AppFormatters.importPhase(context, state.importing!),
-                        ),
-                      ),
-                    )
-                    .animate()
-                    .fadeIn(duration: AppMotion.fast)
-                    .slideY(
-                      begin: 0.5,
-                      end: 0,
-                      duration: AppMotion.fast,
-                      curve: Curves.easeOut,
-                    ),
           ),
         if (state.error != null)
           Positioned(
@@ -385,14 +373,16 @@ class _BookTile extends ConsumerWidget {
   final double progress;
   final bool selectionMode;
   final bool selected;
-  final bool recoveryRunning;
+  final bool selectionLocked;
+  final bool mutationsDisabled;
 
   const _BookTile({
     required this.book,
     required this.progress,
     required this.selectionMode,
     required this.selected,
-    required this.recoveryRunning,
+    required this.selectionLocked,
+    required this.mutationsDisabled,
   });
 
   @override
@@ -428,21 +418,24 @@ class _BookTile extends ConsumerWidget {
         child: Material(
           color: Colors.transparent,
           child: InkWell(
-            onTap: () async {
-              if (selectionMode) {
-                notifier.toggleSelect(book.id);
-              } else {
-                await Navigator.of(
-                  context,
-                ).push(appRoute((_) => ReaderPage(bookId: book.id)));
-                // 阅读页返回后再刷新书架，确保最新进度和最后阅读时间立即可见。
-                if (context.mounted) {
-                  ref.invalidate(libraryProvider);
-                }
-              }
-            },
+            onTap: selectionLocked
+                ? null
+                : () async {
+                    if (selectionMode) {
+                      notifier.toggleSelect(book.id);
+                    } else {
+                      await Navigator.of(
+                        context,
+                      ).push(appRoute((_) => ReaderPage(bookId: book.id)));
+                      // 阅读页返回后再刷新书架，确保最新进度和最后阅读时间立即可见。
+                      if (context.mounted &&
+                          ref.read(libraryProvider).value?.busy != true) {
+                        await notifier.refresh();
+                      }
+                    }
+                  },
             // 长按进入多选模式（普通模式下）；已在多选模式则忽略
-            onLongPress: selectionMode
+            onLongPress: mutationsDisabled || selectionMode
                 ? null
                 : () => notifier.enterSelection(book.id),
             child: Padding(
@@ -472,8 +465,9 @@ class _BookTile extends ConsumerWidget {
                                 value: selected,
                                 materialTapTargetSize:
                                     MaterialTapTargetSize.shrinkWrap,
-                                onChanged: (_) =>
-                                    notifier.toggleSelect(book.id),
+                                onChanged: selectionLocked
+                                    ? null
+                                    : (_) => notifier.toggleSelect(book.id),
                               )
                             : DecoratedBox(
                                 key: const ValueKey('book-icon'),
@@ -554,7 +548,7 @@ class _BookTile extends ConsumerWidget {
                   if (!selectionMode)
                     PopupMenuButton<String>(
                       tooltip: context.l10n.commonDetails,
-                      enabled: !recoveryRunning,
+                      enabled: !mutationsDisabled,
                       padding: EdgeInsets.zero,
                       itemBuilder: (_) => [
                         PopupMenuItem(

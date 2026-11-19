@@ -9,6 +9,37 @@ class AppLocalizationsZh extends AppLocalizations {
   AppLocalizationsZh([String locale = 'zh']) : super(locale);
 
   @override
+  String unreadableFile(String name) {
+    return '无法读取文件：$name';
+  }
+
+  @override
+  String batchImportProgress(int done, int total) {
+    return '导入中 · 已处理 $done/$total';
+  }
+
+  @override
+  String batchDeleteProgress(int done, int total) {
+    return '删除中 · 已处理 $done/$total';
+  }
+
+  @override
+  String batchImportResult(int ok, int skipped, int failed) {
+    return '导入成功 $ok · 跳过 $skipped · 失败 $failed';
+  }
+
+  @override
+  String batchDeleteResult(int ok, int failed) {
+    return '删除成功 $ok · 失败 $failed';
+  }
+
+  @override
+  String get batchRefreshing => '正在刷新书架…';
+
+  @override
+  String get batchRefreshFailed => '书架刷新失败。';
+
+  @override
   String get appTitle => '小说阅读器';
 
   @override

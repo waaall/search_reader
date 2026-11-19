@@ -10,12 +10,17 @@ import '../importer/import_progress.dart';
 import '../importer/importer_service.dart';
 import 'book_deletion_service.dart';
 import 'library_error.dart';
+import 'library_batch.dart';
 
 // 书架状态：所有书 + 当前导入进度 + 多选状态
 class LibraryState {
   final List<Book> books;
   final Map<int, BookProgressSummary> progressByBookId;
   final ImportPhase? importing; // null 表示当前没有导入中
+  final LibraryBatch? batch;
+  final String currentName;
+  final bool busy;
+  final bool refreshFailed;
   final LibraryError? error;
   final bool selectionMode; // 是否处于多选模式
   final Set<int> selectedIds; // 已选中的书籍 id
@@ -25,6 +30,10 @@ class LibraryState {
     this.books = const [],
     this.progressByBookId = const {},
     this.importing,
+    this.batch,
+    this.currentName = '',
+    this.busy = false,
+    this.refreshFailed = false,
     this.error,
     this.selectionMode = false,
     this.selectedIds = const {},
@@ -34,6 +43,11 @@ class LibraryState {
   LibraryState copyWith({
     List<Book>? books,
     Map<int, BookProgressSummary>? progressByBookId,
+    LibraryBatch? batch,
+    bool clearBatch = false,
+    String? currentName,
+    bool? busy,
+    bool? refreshFailed,
     ImportPhase? importing,
     bool clearImporting = false,
     LibraryError? error,
@@ -43,6 +57,10 @@ class LibraryState {
     List<String>? decodingWarningTitles,
   }) {
     return LibraryState(
+      batch: clearBatch ? null : (batch ?? this.batch),
+      currentName: currentName ?? this.currentName,
+      busy: busy ?? this.busy,
+      refreshFailed: refreshFailed ?? this.refreshFailed,
       books: books ?? this.books,
       progressByBookId: progressByBookId ?? this.progressByBookId,
       importing: clearImporting ? null : (importing ?? this.importing),
@@ -93,53 +111,87 @@ class LibraryNotifier extends AsyncNotifier<LibraryState> {
   //     某些情况下会过度收紧（如 epub 文件被置灰）；用 any 由 Dart 侧自行过滤更稳
   //   - 跨平台行为也更一致
   Future<void> pickAndImport() async {
-    if (_recoveryRunning) return;
-
-    final result = await FilePicker.platform.pickFiles(
-      type: FileType.any,
-      allowMultiple: true,
-      withData: false,
-    );
-    if (result == null || result.files.isEmpty) return;
-    if (_recoveryRunning) return;
-
-    final unsupported = <String>[];
-    for (final f in result.files) {
-      final path = f.path;
-      if (path == null) continue;
-      if (!isSupportedBookFile(path)) {
-        unsupported.add(f.name);
-        continue;
-      }
-      if (!await isWithinSizeLimit(path)) {
-        // 当前 txt 与 EPUB 都限制为 10 MiB；EPUB 资源不会参与正文导入。
-        state = AsyncData(
-          (state.value ?? const LibraryState()).copyWith(
-            error: FileTooLargeError(f.name),
-          ),
-        );
-        continue;
-      }
-      if (_recoveryRunning) return;
-      await _importOne(path);
-    }
-    if (unsupported.isNotEmpty) {
-      state = AsyncData(
-        (state.value ?? const LibraryState()).copyWith(
-          error: UnsupportedFilesError(unsupported),
-        ),
+    if (!_beginOperation()) return;
+    try {
+      final result = await FilePicker.platform.pickFiles(
+        type: FileType.any,
+        allowMultiple: true,
+        withData: false,
       );
+      if (result == null || result.files.isEmpty || _recoveryRunning) return;
+      final unsupported = <String>[];
+      await _runBatch(
+        LibraryBatchKind.importing,
+        result.files,
+        (file) => file.name,
+        (file) async {
+          final path = file.path;
+          if (path == null) {
+            _setError(UnreadableFileError(file.name));
+            return LibraryItemOutcome.failed;
+          }
+          if (!isSupportedBookFile(path)) {
+            unsupported.add(file.name);
+            return LibraryItemOutcome.skipped;
+          }
+          if (!await isWithinSizeLimit(path)) {
+            _setError(FileTooLargeError(file.name));
+            return LibraryItemOutcome.skipped;
+          }
+          return _importOne(path);
+        },
+      );
+      if (unsupported.isNotEmpty && _current.error == null) {
+        _setError(UnsupportedFilesError(unsupported));
+      }
+    } catch (e) {
+      _setError(UnexpectedImportError(e));
+    } finally {
+      _endOperation();
     }
+  }
+
+  LibraryState get _current => state.requireValue;
+
+  // 选择器打开前即占用入口，避免连续点击启动两轮操作。
+  bool _beginOperation() {
+    if (state.value == null || _current.busy || _recoveryRunning) return false;
+    state = AsyncData(_current.copyWith(busy: true, clearBatch: true));
+    return true;
+  }
+
+  void _endOperation() {
+    state = AsyncData(
+      _current.copyWith(busy: false, clearImporting: true, currentName: ''),
+    );
+  }
+
+  void _setError(LibraryError error) {
+    state = AsyncData(_current.copyWith(error: error));
+  }
+
+  Future<void> _runBatch<T>(
+    LibraryBatchKind kind,
+    List<T> items,
+    String Function(T) name,
+    Future<LibraryItemOutcome> Function(T) handle,
+  ) async {
+    if (items.isEmpty) return;
+    var progress = LibraryBatch(kind, items.length);
+    state = AsyncData(_current.copyWith(batch: progress, clearError: true));
+    for (final item in items) {
+      state = AsyncData(
+        _current.copyWith(currentName: name(item), clearImporting: true),
+      );
+      final outcome = await handle(item);
+      progress = progress.record(outcome);
+      state = AsyncData(_current.copyWith(batch: progress));
+    }
+    // 最后一项已有结果；刷新只读书架，不得重放批次。
     await refresh();
   }
 
-  Future<void> _importOne(String externalPath) async {
-    state = AsyncData(
-      (state.value ?? const LibraryState()).copyWith(
-        importing: ImportPhase.copying,
-        clearError: true,
-      ),
-    );
+  Future<LibraryItemOutcome> _importOne(String externalPath) async {
     try {
       final result = await _importer.importFile(
         externalPath,
@@ -161,23 +213,26 @@ class LibraryNotifier extends AsyncNotifier<LibraryState> {
           ),
         );
       }
+      return LibraryItemOutcome.succeeded;
     } on ImportException catch (e) {
-      state = AsyncData(
-        (state.value ?? const LibraryState()).copyWith(
-          error: ImportFailedError(e),
-        ),
-      );
+      _setError(ImportFailedError(e));
     } catch (e) {
-      // 兜底：捕获任何未被 ImporterService 包装的异常，避免 UI 无反馈
-      state = AsyncData(
-        (state.value ?? const LibraryState()).copyWith(
-          error: UnexpectedImportError(e),
-        ),
-      );
+      _setError(UnexpectedImportError(e));
+    }
+    return LibraryItemOutcome.failed;
+  }
+
+  void dismissBatch() {
+    if (!_current.busy) state = AsyncData(_current.copyWith(clearBatch: true));
+  }
+
+  Future<void> retryRefresh() async {
+    if (_current.busy || _recoveryRunning) return;
+    state = AsyncData(_current.copyWith(busy: true));
+    try {
+      await refresh();
     } finally {
-      state = AsyncData(
-        (state.value ?? const LibraryState()).copyWith(clearImporting: true),
-      );
+      _endOperation();
     }
   }
 
@@ -190,17 +245,34 @@ class LibraryNotifier extends AsyncNotifier<LibraryState> {
   // 刷新书架数据，但保留 error / 多选 / 导入进度 等 UI 状态
   // （旧版本会重建整个 LibraryState 把 error 一起清掉，导致导入失败"看上去没反应"）
   Future<void> refresh() async {
-    final data = await _loadLibraryData();
-    final cur = state.value ?? const LibraryState();
-    state = AsyncData(
-      cur.copyWith(books: data.books, progressByBookId: data.progressByBookId),
-    );
+    try {
+      final data = await _loadLibraryData();
+      state = AsyncData(
+        _current.copyWith(
+          books: data.books,
+          progressByBookId: data.progressByBookId,
+          refreshFailed: false,
+        ),
+      );
+    } catch (_) {
+      state = AsyncData(_current.copyWith(refreshFailed: true));
+    }
   }
 
   Future<void> deleteBook(Book book) async {
-    if (_recoveryRunning) return;
-    await _deletionService.delete(book);
-    await refresh();
+    if (!_beginOperation()) return;
+    try {
+      await _deletionService.delete(book);
+      await refresh();
+    } catch (e) {
+      _setError(
+        PartialDeleteFailedError([
+          DeleteFailure(title: book.title, details: e),
+        ]),
+      );
+    } finally {
+      _endOperation();
+    }
   }
 
   // 进入多选模式，并预选第一本（通常是长按触发的那本）
@@ -254,32 +326,38 @@ class LibraryNotifier extends AsyncNotifier<LibraryState> {
   // 批量删除选中书籍：循环调用单本删除，结束后统一 refresh
   // 单本失败不阻断其他，错误信息合并展示
   Future<void> deleteSelected() async {
-    if (_recoveryRunning) return;
-    final cur = state.value ?? const LibraryState();
-    if (cur.selectedIds.isEmpty) return;
-    final targets = cur.books
-        .where((b) => cur.selectedIds.contains(b.id))
-        .toList();
-    final failures = <DeleteFailure>[];
-    for (final b in targets) {
-      try {
-        await _deletionService.delete(b);
-      } catch (e) {
-        // 只有数据库删除失败才属于用户可见失败，文件残留会在启动时重试。
-        failures.add(DeleteFailure(title: b.title, details: e));
-      }
-    }
-    final data = await _loadLibraryData();
-    // 使用最新告警状态，既不因删除清空告警，也不恢复等待期间已被手动关闭的告警。
-    final warnings = (state.value ?? cur).decodingWarningTitles;
-    state = AsyncData(
-      LibraryState(
-        books: data.books,
-        progressByBookId: data.progressByBookId,
-        error: failures.isEmpty ? null : PartialDeleteFailedError(failures),
-        decodingWarningTitles: warnings,
-      ),
+    final cur = state.value;
+    if (cur == null) return;
+    await _deleteTargets(
+      cur.books.where((b) => cur.selectedIds.contains(b.id)).toList(),
     );
+  }
+
+  Future<void> _deleteTargets(List<Book> targets) async {
+    if (targets.isEmpty || !_beginOperation()) return;
+    final failures = <DeleteFailure>[];
+    try {
+      await _runBatch(LibraryBatchKind.deleting, targets, (b) => b.title, (
+        b,
+      ) async {
+        try {
+          await _deletionService.delete(b);
+          return LibraryItemOutcome.succeeded;
+        } catch (e) {
+          failures.add(DeleteFailure(title: b.title, details: e));
+          return LibraryItemOutcome.failed;
+        }
+      });
+      state = AsyncData(
+        _current.copyWith(
+          selectionMode: false,
+          selectedIds: const {},
+          error: failures.isEmpty ? null : PartialDeleteFailedError(failures),
+        ),
+      );
+    } finally {
+      _endOperation();
+    }
   }
 }
 
