@@ -25,8 +25,10 @@ class StagedBookFile {
 // - 临时文件：appDocs/books/.staging/<uuid>.<ext>.pending
 // - 数据库 books.file_path 只保存正式文件的相对路径
 class BookStorage {
-  BookStorage({StorageRootProvider? rootProvider})
-    : _rootProvider = rootProvider ?? getApplicationDocumentsDirectory;
+  BookStorage({StorageRootProvider? rootProvider, bool? allowOrphanCleanup})
+    : _rootProvider = rootProvider ?? getApplicationDocumentsDirectory,
+      _allowOrphanCleanup =
+          allowOrphanCleanup ?? !(Platform.isWindows || Platform.isLinux);
 
   static final BookStorage shared = BookStorage();
 
@@ -36,6 +38,8 @@ class BookStorage {
   static const _uuid = Uuid();
 
   final StorageRootProvider _rootProvider;
+  // Windows/Linux 的文档目录由用户共享，数据库中没有引用不能证明文件属于本应用。
+  final bool _allowOrphanCleanup;
 
   Future<Directory> _root() => _rootProvider();
 
@@ -311,6 +315,7 @@ class BookStorage {
 
   // 仅清理未被 books.file_path 引用的正式直属文件；目录和链接一律保留。
   Future<void> deleteUnreferencedFiles(Set<String> referencedPaths) async {
+    if (!_allowOrphanCleanup) return;
     final root = await _root();
     final directory = Directory(p.join(root.path, _booksDir));
     if (!await directory.exists()) return;
@@ -331,6 +336,7 @@ class BookStorage {
   Future<void> deleteUnregisteredStagedFiles(
     Set<String> registeredPaths,
   ) async {
+    if (!_allowOrphanCleanup) return;
     final root = await _root();
     final directory = Directory(p.join(root.path, _booksDir, _stagingDir));
     if (!await directory.exists()) return;

@@ -33,7 +33,10 @@ void main() {
     tempDirectory = await Directory.systemTemp.createTemp(
       'search_reader_consistency_',
     );
-    storage = BookStorage(rootProvider: () async => tempDirectory);
+    storage = BookStorage(
+      rootProvider: () async => tempDirectory,
+      allowOrphanCleanup: true,
+    );
     database = await databaseFactoryFfi.openDatabase(
       p.join(tempDirectory.path, 'test.db'),
       options: OpenDatabaseOptions(
@@ -450,6 +453,30 @@ void main() {
       if (!releaseRead.isCompleted) releaseRead.complete();
       await pendingImport;
     }
+  });
+
+  test('共享目录恢复保留原件和未登记暂存文件，主动删除只影响导入副本', () async {
+    final shared = BookStorage(
+      rootProvider: () async => tempDirectory,
+      allowOrphanCleanup: false,
+    );
+    final directory = Directory(p.join(tempDirectory.path, 'books'));
+    await directory.create();
+    final original = File(p.join(directory.path, '原件.txt'));
+    await original.writeAsString(_content);
+    final staged = await shared.stageTextFile('未登记文件');
+    final result = await ImporterService(
+      importDao: importDao,
+      storage: shared,
+    ).importFile(original.path);
+    await recoverApplicationData(database, storage: shared);
+    final dao = BookDao(database: database);
+    final book = (await dao.findById(result.bookId))!;
+    await BookDeletionService(bookDao: dao, storage: shared).delete(book);
+    expect(await original.readAsString(), _content);
+    expect(await shared.exists(staged.stagedPath), isTrue);
+    expect(await shared.exists(book.filePath), isFalse);
+    expect(await dao.findById(book.id), isNull);
   });
 
   test('启动时清理无日志临时文件、坏书和孤儿正式文件', () async {

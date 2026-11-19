@@ -18,7 +18,7 @@ class BookDeletionService {
       try {
         await _storage.deleteFile(book.filePath);
       } catch (_) {
-        // 数据库已经提交，残留文件会被下次启动的孤儿清理再次尝试删除。
+        // 数据库已经提交，仅私有目录允许启动时再次清理残留文件。
       }
     });
   }
