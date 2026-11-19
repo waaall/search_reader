@@ -129,7 +129,8 @@ String makeSnippetForMatch(
   final end = (match.endOffset + contextChars).clamp(0, content.length);
   final prefix = start > 0 ? '...' : '';
   final suffix = end < content.length ? '...' : '';
-  final segment = content.substring(start, end);
+  // 仅合并截取后摘要的空白，避免换行挤掉关键词；原文坐标和截取范围保持不变。
+  final segment = content.substring(start, end).replaceAll(RegExp(r'\s+'), ' ');
   final highlighted = markSearchTerms(segment, rawQuery);
   return '$prefix$highlighted$suffix';
 }

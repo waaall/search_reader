@@ -1,11 +1,13 @@
-// 搜索页并发测试：确保旧请求不会覆盖最新输入对应的界面状态。
+// 搜索页回归测试：验证请求竞态、结果筛选及摘要中的关键词可见性。
 
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:search_reader/core/db/daos.dart';
+import 'package:search_reader/core/db/text_index.dart';
 import 'package:search_reader/features/search/search_page.dart';
 import 'package:search_reader/features/search/search_service.dart';
 import 'package:search_reader/l10n/app_localizations.dart';
@@ -125,6 +127,53 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('first-book · first-chapter'), findsOneWidget);
     expect(find.text('second-book · second-chapter'), findsNothing);
+  });
+
+  testWidgets('摘要前文含连续换行时关键词仍在两行内可见', (tester) async {
+    const query = '搜索目标';
+    final content = '${'前文' * 20}段尾。\n\n\t  搜索目标在这里。\r\n\r\n后文';
+    final match = findNextTextMatch(content, query)!;
+    final snippet = makeSnippetForMatch(content, query, match);
+    Future<SearchResultSet> search(
+      String raw, {
+      SearchCancellationCheck? isCancelled,
+    }) async => SearchResultSet(
+      hits: [
+        SearchHit(
+          bookId: 1,
+          bookTitle: '书',
+          chapterId: 1,
+          chapterIndex: 0,
+          chapterTitle: '第一章',
+          snippet: snippet,
+          charOffset: match.offset,
+          matchLength: match.length,
+        ),
+      ],
+    );
+
+    await tester.pumpWidget(buildSubject(search));
+    await tester.enterText(find.byType(TextField), query);
+    await tester.pumpAndSettle();
+
+    expect(snippet, startsWith('...'));
+    final plainText = snippet
+        .replaceAll('<mark>', '')
+        .replaceAll('</mark>', '');
+    final richText = find.byWidgetPredicate(
+      (widget) => widget is RichText && widget.text.toPlainText() == plainText,
+    );
+    expect(richText, findsOneWidget);
+    final paragraph = tester.renderObject<RenderParagraph>(richText);
+    expect(paragraph.maxLines, 2);
+    // 检查实际布局中的文字框，而不只是检查摘要字符串包含关键词。
+    final boxes = paragraph.getBoxesForSelection(
+      TextSelection(
+        baseOffset: plainText.indexOf(query),
+        extentOffset: plainText.indexOf(query) + query.length,
+      ),
+    );
+    expect(boxes, isNotEmpty);
   });
 
   for (final withHits in [true, false]) {

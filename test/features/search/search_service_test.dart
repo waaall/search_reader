@@ -103,6 +103,57 @@ void main() {
     expect(result.hits.every((hit) => hit.matchLength == 5), isTrue);
   });
 
+  test('摘要合并空白但保留原文文件、命中数量与跳转坐标', () async {
+    final directory = await Directory.systemTemp.createTemp(
+      'search_whitespace_',
+    );
+    try {
+      final storage = BookStorage(rootProvider: () async => directory);
+      const query = '搜索目标';
+      const content = '前文🙂\r\n\r\n\t  搜索目标\n\n间隔文字\r\n\t  搜索目标\t\t后文';
+      final staged = await storage.stageTextFile(content);
+      final service = SearchService(
+        dao: _FakeSearchDao([
+          _row(
+            bookId: 1,
+            title: '书',
+            content: content,
+            filePath: staged.stagedPath,
+          ),
+        ]),
+        storage: storage,
+      );
+
+      final result = await service.search(query);
+
+      expect(result.hits, hasLength(2));
+      expect(result.hits.map((hit) => hit.charOffset), [
+        content.indexOf(query),
+        content.lastIndexOf(query),
+      ]);
+      for (final hit in result.hits) {
+        expect(hit.matchLength, query.length);
+        expect(hit.snippet, contains('<mark>$query</mark>'));
+        expect(hit.snippet, isNot(matches(RegExp(r'[\r\n\t]|\s{2,}'))));
+        // 摘要变短不影响阅读器按原文坐标定位关键词。
+        expect(
+          content.substring(hit.charOffset, hit.charOffset + hit.matchLength),
+          query,
+        );
+      }
+      final storedContent = await storage
+          .readUtf8RangeChunks(
+            staged.stagedPath,
+            startByte: 0,
+            endByte: utf8.encode(content).length,
+          )
+          .join();
+      expect(storedContent, content);
+    } finally {
+      await directory.delete(recursive: true);
+    }
+  });
+
   test('结果超过展示上限时截断并明确标记', () async {
     const content = '命中 命中 命中';
     final service = SearchService(

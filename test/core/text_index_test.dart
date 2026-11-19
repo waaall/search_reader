@@ -1,3 +1,4 @@
+// 文本索引与摘要回归测试：验证查询规则、关键词高亮及摘要空白整理。
 import 'package:flutter_test/flutter_test.dart';
 import 'package:search_reader/core/db/text_index.dart';
 
@@ -75,6 +76,49 @@ void main() {
     test('英文高亮不区分大小写并保留原文', () {
       final s = makeSnippet('Alice walked home.', 'alice');
       expect(s, contains('<mark>Alice</mark>'));
+    });
+  });
+
+  group('makeSnippetForMatch', () {
+    final whitespaceCases = <String, String>{
+      '连续换行': '\n\n',
+      '回车换行': '\r\n\r\n',
+      '回车': '\r\r',
+      '制表符': '\t\t',
+      '连续空格': '    ',
+      '全角空格': '\u3000\u3000',
+      '混合空白': '\r\n\n\t  \u3000',
+    };
+    for (final entry in whitespaceCases.entries) {
+      test('${entry.key}合并为一个空格且保留高亮和文字间隔', () {
+        final content = '前文${entry.value}搜索目标${entry.value}后文';
+        final match = findNextTextMatch(content, '搜索目标')!;
+
+        expect(
+          makeSnippetForMatch(content, '搜索目标', match),
+          '前文 <mark>搜索目标</mark> 后文',
+        );
+      });
+    }
+
+    test('先按原文边界截取再合并空白，保留前后省略号', () {
+      const content = '甲\n\n乙\n\n搜索目标\t\t丙\n\n丁';
+      final match = findNextTextMatch(content, '搜索目标')!;
+
+      expect(
+        makeSnippetForMatch(content, '搜索目标', match, contextChars: 4),
+        '... 乙 <mark>搜索目标</mark> 丙 ...',
+      );
+    });
+
+    test('没有多余空白的摘要保持原样', () {
+      const content = '前文搜索目标后文';
+      final match = findNextTextMatch(content, '搜索目标')!;
+
+      expect(
+        makeSnippetForMatch(content, '搜索目标', match),
+        '前文<mark>搜索目标</mark>后文',
+      );
     });
   });
 
