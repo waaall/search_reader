@@ -12,6 +12,8 @@ import 'package:search_reader/core/db/application_data_operation_coordinator.dar
 import 'package:search_reader/features/library/import_warnings_notice.dart';
 import 'package:search_reader/features/importer/importer_service.dart';
 import 'package:search_reader/features/library/library_error.dart';
+import 'package:search_reader/features/library/library_batch.dart';
+import 'package:search_reader/features/library/widgets/library_batch_notice.dart';
 import 'package:search_reader/features/library/library_provider.dart';
 import 'package:search_reader/l10n/app_localizations.dart';
 
@@ -193,6 +195,19 @@ void main() {
       expect(library.batch!.succeeded, 1);
       expect(library.batch!.skipped, 2);
       expect(library.batch!.failed, 1);
+      final issues = library.batch!.importIssues;
+      expect((issues[0] as UnsupportedFilesError).fileNames, ['other.pdf']);
+      expect((issues[1] as ImportFailedError).fileName, 'broken.epub');
+      expect((issues[2] as FileTooLargeError).fileName, 'large.txt');
+      expect(issues, hasLength(3));
+      // 取消选择或没有选中文件时，保留同一份摘要与明细。
+      for (final files in <List<File>?>[null, []]) {
+        FilePicker.platform = _FilesPicker(files);
+        await notifier.pickAndImport();
+        final afterCancel = container.read(libraryProvider).requireValue;
+        expect(afterCancel.batch, same(library.batch));
+        expect(afterCancel.busy, isFalse);
+      }
       expect(library.books.single.title, 'valid');
       expect(library.busy, isFalse);
     } finally {
@@ -214,6 +229,8 @@ void main() {
       );
       await notifier.deleteSelected();
       final stale = container.read(libraryProvider).requireValue;
+      expect(stale.books, isEmpty);
+      expect(stale.progressByBookId, isEmpty);
       expect(stale.refreshFailed, isTrue);
       expect(stale.busy, isFalse);
       expect(stale.batch!.succeeded, 2);
@@ -229,6 +246,75 @@ void main() {
       container.dispose();
       await fixture.close();
     }
+  });
+
+  for (final batchDelete in [true, false]) {
+    test('刷新失败时仅移除已提交的书，批量删除：$batchDelete', () async {
+      final fixture = ApplicationFixture();
+      await fixture.open();
+      final container = ProviderContainer();
+      try {
+        final notifier = await _importWarningBooks(fixture, container);
+        final target = container
+            .read(libraryProvider)
+            .requireValue
+            .books
+            .singleWhere((book) => book.title == 'healthy');
+        await fixture.db.execute(
+          'ALTER TABLE reading_progress RENAME TO hidden_progress',
+        );
+        if (batchDelete) {
+          await fixture.db.execute("""
+            CREATE TRIGGER deny_one BEFORE DELETE ON books WHEN OLD.title = 'damaged'
+            BEGIN SELECT RAISE(ABORT, '模拟单项失败'); END
+          """);
+          notifier.selectAll();
+          await notifier.deleteSelected();
+        } else {
+          await notifier.deleteBook(target);
+        }
+        final result = container.read(libraryProvider).requireValue;
+        expect(result.books.single.title, 'damaged');
+        expect(result.refreshFailed, isTrue);
+        if (batchDelete) {
+          expect(result.batch!.failed, 1);
+          expect(result.batch!.succeeded, 1);
+        }
+      } finally {
+        container.dispose();
+        await fixture.close();
+      }
+    });
+  }
+
+  testWidgets('从批次摘要打开并关闭逐文件明细', (tester) async {
+    final batch = const LibraryBatch(LibraryBatchKind.importing, 2, skipped: 2)
+        .withImportIssues([
+          const FileTooLargeError('large.txt'),
+          const UnsupportedFilesError(['other.pdf']),
+        ]);
+    await tester.pumpWidget(
+      MaterialApp(
+        locale: const Locale('zh'),
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
+        home: Scaffold(
+          body: LibraryBatchNotice(
+            state: LibraryState(batch: batch),
+            onDismiss: () {},
+            onRetry: null,
+          ),
+        ),
+      ),
+    );
+    await tester.tap(find.text('详情'));
+    await tester.pumpAndSettle();
+    expect(tester.takeException(), isNull);
+    expect(find.textContaining('large.txt'), findsOneWidget);
+    expect(find.textContaining('other.pdf'), findsOneWidget);
+    await tester.tap(find.byType(CloseButton));
+    await tester.pumpAndSettle();
+    expect(find.byType(AlertDialog), findsNothing);
   });
 
   for (final language in ['en', 'zh']) {
@@ -304,7 +390,7 @@ Future<LibraryNotifier> _importWarningBooks(
 }
 
 class _FilesPicker extends FilePicker {
-  final List<File> files;
+  final List<File>? files;
   _FilesPicker(this.files);
 
   @override
@@ -321,12 +407,14 @@ class _FilesPicker extends FilePicker {
     bool withReadStream = false,
     bool lockParentWindow = false,
     bool readSequential = false,
-  }) async => FilePickerResult([
-    for (final file in files)
-      PlatformFile(
-        name: p.basename(file.path),
-        size: await file.length(),
-        path: file.path,
-      ),
-  ]);
+  }) async => files == null
+      ? null
+      : FilePickerResult([
+          for (final file in files!)
+            PlatformFile(
+              name: p.basename(file.path),
+              size: await file.length(),
+              path: file.path,
+            ),
+        ]);
 }

@@ -119,31 +119,23 @@ class LibraryNotifier extends AsyncNotifier<LibraryState> {
         withData: false,
       );
       if (result == null || result.files.isEmpty || _recoveryRunning) return;
-      final unsupported = <String>[];
+      final issues = <LibraryError>[];
       await _runBatch(
         LibraryBatchKind.importing,
         result.files,
         (file) => file.name,
         (file) async {
-          final path = file.path;
-          if (path == null) {
-            _setError(UnreadableFileError(file.name));
-            return LibraryItemOutcome.failed;
-          }
-          if (!isSupportedBookFile(path)) {
-            unsupported.add(file.name);
-            return LibraryItemOutcome.skipped;
-          }
-          if (!await isWithinSizeLimit(path)) {
-            _setError(FileTooLargeError(file.name));
-            return LibraryItemOutcome.skipped;
-          }
-          return _importOne(path);
+          final (outcome, issue) = await _importItem(file);
+          if (issue != null) issues.add(issue);
+          return outcome;
         },
       );
-      if (unsupported.isNotEmpty && _current.error == null) {
-        _setError(UnsupportedFilesError(unsupported));
+      if (issues.isNotEmpty) {
+        state = AsyncData(
+          _current.copyWith(batch: _current.batch!.withImportIssues(issues)),
+        );
       }
+      await refresh();
     } catch (e) {
       _setError(UnexpectedImportError(e));
     } finally {
@@ -156,7 +148,7 @@ class LibraryNotifier extends AsyncNotifier<LibraryState> {
   // 选择器打开前即占用入口，避免连续点击启动两轮操作。
   bool _beginOperation() {
     if (state.value == null || _current.busy || _recoveryRunning) return false;
-    state = AsyncData(_current.copyWith(busy: true, clearBatch: true));
+    state = AsyncData(_current.copyWith(busy: true));
     return true;
   }
 
@@ -170,6 +162,7 @@ class LibraryNotifier extends AsyncNotifier<LibraryState> {
     state = AsyncData(_current.copyWith(error: error));
   }
 
+  // 批次只负责逐项计数；调用方先发布业务结果，再独立刷新书架。
   Future<void> _runBatch<T>(
     LibraryBatchKind kind,
     List<T> items,
@@ -187,14 +180,25 @@ class LibraryNotifier extends AsyncNotifier<LibraryState> {
       progress = progress.record(outcome);
       state = AsyncData(_current.copyWith(batch: progress));
     }
-    // 最后一项已有结果；刷新只读书架，不得重放批次。
-    await refresh();
   }
 
-  Future<LibraryItemOutcome> _importOne(String externalPath) async {
+  // 每个输入只产生一个结果；单项异常不会吞掉此前的明细或中断后续文件。
+  Future<(LibraryItemOutcome, LibraryError?)> _importItem(
+    PlatformFile file,
+  ) async {
     try {
+      final path = file.path;
+      if (path == null) {
+        return (LibraryItemOutcome.failed, UnreadableFileError(file.name));
+      }
+      if (!isSupportedBookFile(path)) {
+        return (LibraryItemOutcome.skipped, UnsupportedFilesError([file.name]));
+      }
+      if (!await isWithinSizeLimit(path)) {
+        return (LibraryItemOutcome.skipped, FileTooLargeError(file.name));
+      }
       final result = await _importer.importFile(
-        externalPath,
+        path,
         onProgress: (phase) {
           state = AsyncData(
             (state.value ?? const LibraryState()).copyWith(importing: phase),
@@ -213,13 +217,15 @@ class LibraryNotifier extends AsyncNotifier<LibraryState> {
           ),
         );
       }
-      return LibraryItemOutcome.succeeded;
+      return (LibraryItemOutcome.succeeded, null);
     } on ImportException catch (e) {
-      _setError(ImportFailedError(e));
+      return (LibraryItemOutcome.failed, ImportFailedError(file.name, e));
     } catch (e) {
-      _setError(UnexpectedImportError(e));
+      return (
+        LibraryItemOutcome.failed,
+        ImportFailedError(file.name, ImportException.unexpected(e)),
+      );
     }
-    return LibraryItemOutcome.failed;
   }
 
   void dismissBatch() {
@@ -242,11 +248,15 @@ class LibraryNotifier extends AsyncNotifier<LibraryState> {
     state = AsyncData(current.copyWith(decodingWarningTitles: const []));
   }
 
+  int _refreshVersion = 0;
+
   // 刷新书架数据，但保留 error / 多选 / 导入进度 等 UI 状态
   // （旧版本会重建整个 LibraryState 把 error 一起清掉，导致导入失败"看上去没反应"）
   Future<void> refresh() async {
+    final version = ++_refreshVersion;
     try {
       final data = await _loadLibraryData();
+      if (version != _refreshVersion) return;
       state = AsyncData(
         _current.copyWith(
           books: data.books,
@@ -255,14 +265,34 @@ class LibraryNotifier extends AsyncNotifier<LibraryState> {
         ),
       );
     } catch (_) {
+      if (version != _refreshVersion) return;
       state = AsyncData(_current.copyWith(refreshFailed: true));
     }
+  }
+
+  // 只移除事务已提交的书，并使删除前启动的读取失效。
+  void _removeCommitted(Set<int> ids) {
+    if (ids.isEmpty) return;
+    ++_refreshVersion;
+    final cur = _current;
+    final selected = cur.selectedIds.difference(ids);
+    state = AsyncData(
+      cur.copyWith(
+        books: cur.books.where((b) => !ids.contains(b.id)).toList(),
+        progressByBookId: Map.of(cur.progressByBookId)
+          ..removeWhere((id, _) => ids.contains(id)),
+        selectedIds: selected,
+        selectionMode: cur.selectionMode && selected.isNotEmpty,
+      ),
+    );
   }
 
   Future<void> deleteBook(Book book) async {
     if (!_beginOperation()) return;
     try {
+      state = AsyncData(_current.copyWith(clearBatch: true, clearError: true));
       await _deletionService.delete(book);
+      _removeCommitted({book.id});
       await refresh();
     } catch (e) {
       _setError(
@@ -336,18 +366,22 @@ class LibraryNotifier extends AsyncNotifier<LibraryState> {
   Future<void> _deleteTargets(List<Book> targets) async {
     if (targets.isEmpty || !_beginOperation()) return;
     final failures = <DeleteFailure>[];
+    final committed = <int>{};
     try {
       await _runBatch(LibraryBatchKind.deleting, targets, (b) => b.title, (
         b,
       ) async {
         try {
           await _deletionService.delete(b);
+          committed.add(b.id);
           return LibraryItemOutcome.succeeded;
         } catch (e) {
           failures.add(DeleteFailure(title: b.title, details: e));
           return LibraryItemOutcome.failed;
         }
       });
+      _removeCommitted(committed);
+      await refresh();
       state = AsyncData(
         _current.copyWith(
           selectionMode: false,

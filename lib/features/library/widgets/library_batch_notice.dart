@@ -24,7 +24,9 @@ class LibraryBatchNotice extends StatelessWidget {
     final importing = batch?.kind == LibraryBatchKind.importing;
     return Column(
       children: [
-        if (batch != null && state.busy)
+        if (batch != null &&
+            state.busy &&
+            (batch.processed < batch.total || state.currentName.isNotEmpty))
           ListTile(
             title: Text(
               importing
@@ -63,8 +65,17 @@ class LibraryBatchNotice extends StatelessWidget {
                     )
                   : l10n.batchDeleteResult(batch.succeeded, batch.failed),
             ),
+            subtitle: batch.importIssues.isEmpty
+                ? null
+                : Align(
+                    alignment: AlignmentDirectional.centerStart,
+                    child: TextButton(
+                      onPressed: () => _showIssues(context, batch),
+                      child: Text(l10n.commonDetails),
+                    ),
+                  ),
             trailing: IconButton(
-              onPressed: onDismiss,
+              onPressed: state.busy ? null : onDismiss,
               icon: const Icon(Icons.close),
               tooltip: MaterialLocalizations.of(context).closeButtonTooltip,
             ),
@@ -78,6 +89,29 @@ class LibraryBatchNotice extends StatelessWidget {
             ),
           ),
       ],
+    );
+  }
+
+  // 明细独立滚动，长批次不会把书架内容挤出屏幕。
+  void _showIssues(BuildContext context, LibraryBatch batch) {
+    showDialog<void>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(context.l10n.commonDetails),
+        content: SizedBox(
+          width: 400,
+          child: ListView.builder(
+            shrinkWrap: true,
+            itemCount: batch.importIssues.length,
+            itemBuilder: (context, index) => ListTile(
+              title: Text(
+                AppFormatters.libraryError(context, batch.importIssues[index]),
+              ),
+            ),
+          ),
+        ),
+        actions: [CloseButton(onPressed: () => Navigator.pop(context))],
+      ),
     );
   }
 }

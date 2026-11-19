@@ -51,9 +51,8 @@ class AppFormatters {
       UnsupportedFilesError(:final fileNames) => l10n.unsupportedFileFormats(
         fileNames.join('\n'),
       ),
-      ImportFailedError(:final exception) => l10n.importFailed(
-        importException(context, exception),
-      ),
+      ImportFailedError(:final fileName, :final exception) =>
+        '$fileName: ${l10n.importFailed(importException(context, exception))}',
       UnexpectedImportError(:final details) => l10n.importFailed(
         l10n.importDetailPrefix(details.toString()),
       ),

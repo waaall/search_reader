@@ -18,7 +18,8 @@ final class UnsupportedFilesError extends LibraryError {
 
 final class ImportFailedError extends LibraryError {
   final ImportException exception;
-  const ImportFailedError(this.exception);
+  final String fileName;
+  const ImportFailedError(this.fileName, this.exception);
 }
 
 final class UnexpectedImportError extends LibraryError {
